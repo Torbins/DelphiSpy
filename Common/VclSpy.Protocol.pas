@@ -1,0 +1,47 @@
+unit VclSpy.Protocol;
+
+{ Constants shared by the VclSpy tool, the injector, the hook stub and the
+  inspector DLLs. Uses only Winapi.Windows, because the hook stub is built
+  without SysUtils and without runtime packages. }
+
+interface
+
+uses
+  Winapi.Windows;
+
+const
+  VclSpyQueryMessageName = 'VclSpy.Query.v1';
+  VclSpyCopyDataMagic = $31535356; // 'VSS1'
+  VclSpyReplyTimeout = 5000;
+
+  VclSpyHookDllName = 'VclSpyHook.dll';
+  VclSpyHookExport = 'VclSpyCallWndProc';
+  VclSpyInspectDllPrefix = 'VclSpyInspect';
+  VclSpyInspectExport = 'VclSpyInspect';
+  VclSpyInjectExeName = 'VclSpyInject.exe';
+
+  // BPL suffixes of the Delphi versions the hook stub looks for, newest first.
+  // An inspector named VclSpyInspect<suffix>.dll must exist for each one used.
+  VclSpyPackageSuffixes: array[0..3] of string = ('370', '290', '280', '270');
+
+type
+  // Exported by the inspector DLLs. X and Y are physical screen coordinates.
+  TVclSpyInspectProc = procedure(Wnd: HWND; X, Y: Integer; ReplyWnd: HWND); stdcall;
+
+function PackPoint(X, Y: Integer): LPARAM;
+procedure UnpackPoint(Value: LPARAM; out X, Y: Integer);
+
+implementation
+
+function PackPoint(X, Y: Integer): LPARAM;
+begin
+  Result := LPARAM(Cardinal(Word(SmallInt(X))) or (Cardinal(Word(SmallInt(Y))) shl 16));
+end;
+
+procedure UnpackPoint(Value: LPARAM; out X, Y: Integer);
+begin
+  X := SmallInt(Word(Value and $FFFF));
+  Y := SmallInt(Word((Value shr 16) and $FFFF));
+end;
+
+end.

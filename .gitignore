@@ -1,0 +1,11 @@
+﻿################################################################################
+# This .gitignore file was automatically created by Microsoft(R) Visual Studio.
+################################################################################
+
+/.vs
+/Packages/3rd Party/TER26.DLL
+/Packages/3rd Party/toc26.ocx
+/Packages/3rd Party/toc26.ocx
+/Packages/3rd Party/TER26.DLL
+
+Source/Paris Shell/DCOM/STAPPParisShellDCOMSE.*
