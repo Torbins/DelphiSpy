@@ -4,8 +4,8 @@ interface
 
 uses
   Winapi.Windows, Winapi.Messages, System.SysUtils, System.Classes, System.Types, System.JSON,
-  Vcl.Controls, Vcl.Forms, Vcl.StdCtrls, Vcl.ExtCtrls, Vcl.ComCtrls, Vcl.Graphics,
-  Finder, InjectRunner;
+  Vcl.Controls, Vcl.Forms, Vcl.StdCtrls, Vcl.ExtCtrls, Vcl.ComCtrls, Vcl.Graphics, Vcl.Menus,
+  Finder, InjectRunner, VclSpy.RemoteClient;
 
 type
   TfrmMain = class(TForm)
@@ -16,6 +16,8 @@ type
     chkStayOnTop: TCheckBox;
     btnCopyName: TButton;
     btnCopyJson: TButton;
+    btnConnect: TButton;
+    btnForms: TButton;
     pnlSummary: TPanel;
     lblName: TLabel;
     edtName: TEdit;
@@ -77,10 +79,21 @@ type
     procedure tvParentsExpanding(Sender: TObject; Node: TTreeNode; var AllowExpansion: Boolean);
     procedure tvParentsChange(Sender: TObject; Node: TTreeNode);
     procedure tmrSelectTimer(Sender: TObject);
+    procedure btnConnectClick(Sender: TObject);
+    procedure btnFormsClick(Sender: TObject);
   private
     FFinder: TFinderTool;
     FFrame: THighlightFrame;
-    FRunner: TInjectRunner;
+    FRunner: TRequestRunner;
+    // Connects to applications that link VclSpy.Server; created on first use
+    FClient: TRemoteClient;
+    // The TRemoteServer.ManagerId of the server FReport came from, '' for a
+    // local target. Requests about the report go there.
+    FReportServer: string;
+    FHistoryServers: TStringList; // parallel to FHistoryJson
+    FFormsMenu: TPopupMenu;
+    FFormAddresses: TStringList; // of FFormsMenu's items, by Tag
+    FDefaultHint: string;
     FHoverWnd: HWND;
     FReport: TJSONObject;
     FHistoryJson: TStringList; // parallel to lbHistory.Items, newest first
@@ -99,8 +112,15 @@ type
     procedure RequestDone(Sender: TObject);
     procedure ChildrenDone(Sender: TObject);
     procedure SelectDone(Sender: TObject);
+    procedure FormsDone(Sender: TObject);
+    procedure FormsMenuClick(Sender: TObject);
     procedure StartInspection(Wnd: HWND; const ScreenPt: TPoint);
     function StartRequest(Request: TJSONObject; OnDone: TNotifyEvent): Boolean;
+    function StartRemoteRequest(Request: TJSONObject; OnDone: TNotifyEvent): Boolean;
+    function RemoteConnected: Boolean;
+    procedure PickRemote;
+    procedure UpdateRemoteUI;
+    procedure ServerGone;
     function ReportOk: Boolean;
     function SelectedProperty: TJSONObject;
     function FindProperty(const Path: string): TJSONObject;
@@ -111,7 +131,7 @@ type
     procedure CreateExpanderImages;
     procedure FormAfterMonitorDpiChanged(Sender: TObject; OldDPI, NewDPI: Integer);
     procedure UpdatePropertyButtons;
-    procedure ShowReport(const Json: string; AddToHistory: Boolean);
+    procedure ShowReport(const Json: string; AddToHistory: Boolean; const Server: string);
     procedure ShowError(const Msg: string);
     procedure ShowInfo(const Msg: string);
     procedure ClearDetails;
@@ -131,7 +151,7 @@ implementation
 {$R *.dfm}
 
 uses
-  System.Generics.Collections, System.UITypes, System.Math, Vcl.Clipbrd, PropEditor;
+  System.Generics.Collections, System.UITypes, System.Math, Vcl.Clipbrd, PropEditor, ConnectForm;
 
 const
   MaxHistory = 30;
@@ -342,6 +362,10 @@ end;
 procedure TfrmMain.FormCreate(Sender: TObject);
 begin
   FHistoryJson := TStringList.Create;
+  FHistoryServers := TStringList.Create;
+  FFormAddresses := TStringList.Create;
+  FFormsMenu := TPopupMenu.Create(Self);
+  FDefaultHint := lblHint.Caption;
   FExpanded := TStringList.Create;
   FExpanded.Sorted := True;
   FExpanded.CaseSensitive := False;
@@ -374,8 +398,17 @@ procedure TfrmMain.FormDestroy(Sender: TObject);
 begin
   if FRunner <> nil then
     FRunner.OnTerminate := nil; // it frees itself; just don't call back into a dead form
+  if FClient <> nil then
+  begin
+    FClient.OnDisconnected := nil;
+    // A TRemoteRunner may still use it; the process ends anyway
+    if FRunner = nil then
+      FClient.Free;
+  end;
   FReport.Free;
   FHistoryJson.Free;
+  FHistoryServers.Free;
+  FFormAddresses.Free;
   FExpanded.Free;
 end;
 
@@ -485,10 +518,10 @@ procedure TfrmMain.RunnerDone(Sender: TObject);
 begin
   Screen.Cursor := crDefault;
   FRunner := nil;
-  ShowReport(TInjectRunner(Sender).Output, True);
+  ShowReport(TRequestRunner(Sender).Output, True, TRequestRunner(Sender).Server);
 end;
 
-procedure TfrmMain.ShowReport(const Json: string; AddToHistory: Boolean);
+procedure TfrmMain.ShowReport(const Json: string; AddToHistory: Boolean; const Server: string);
 var
   Value: TJSONValue;
   Control, Form: TJSONObject;
@@ -506,6 +539,7 @@ begin
   end;
   FReport.Free;
   FReport := TJSONObject(Value);
+  FReportServer := Server;
   ClearDetails;
   memJson.Text := FReport.Format(2);
 
@@ -535,11 +569,16 @@ begin
   FillOwners(Control);
   FillClasses(Control);
 
-  lblTarget.Caption := Format('%s   PID %s   %s', [JStr(FReport, 'inspector'), JStr(FReport, 'process.pid'),
-    JStr(FReport, 'process.exe')]);
+  if Server <> '' then
+    lblTarget.Caption := Format('%s   PID %s   %s   on %s (remote)', [JStr(FReport, 'inspector'),
+      JStr(FReport, 'process.pid'), JStr(FReport, 'process.exe'), JStr(FReport, 'process.computer')])
+  else
+    lblTarget.Caption := Format('%s   PID %s   %s', [JStr(FReport, 'inspector'), JStr(FReport, 'process.pid'),
+      JStr(FReport, 'process.exe')]);
 
+  // The screen of a remote target is not this one
   ScreenRect := JObj(Control, 'screenRect');
-  if ScreenRect <> nil then
+  if (ScreenRect <> nil) and (Server = '') then
     FlashRect(TRect.Create(ScreenRect.GetValue<Integer>('left'), ScreenRect.GetValue<Integer>('top'),
       ScreenRect.GetValue<Integer>('right'), ScreenRect.GetValue<Integer>('bottom')));
 
@@ -549,9 +588,11 @@ begin
       ExtractFileName(JStr(FReport, 'process.exe'))]);
     lbHistory.Items.Insert(0, HistoryCaption);
     FHistoryJson.Insert(0, Json);
+    FHistoryServers.Insert(0, Server);
     while FHistoryJson.Count > MaxHistory do
     begin
       FHistoryJson.Delete(FHistoryJson.Count - 1);
+      FHistoryServers.Delete(FHistoryServers.Count - 1);
       lbHistory.Items.Delete(lbHistory.Items.Count - 1);
     end;
   end;
@@ -793,7 +834,21 @@ begin
   Result := False;
   if (FRunner <> nil) or not ReportOk then
     Exit;
+  if Request.GetValue('address') = nil then
+    Request.AddPair('address', JStr(FReport, 'control.address'));
   Wnd := HWND(FReport.GetValue<Int64>('window.hwnd', 0));
+  if FReportServer <> '' then
+  begin
+    if not RemoteConnected or (FClient.Server.ManagerId <> FReportServer) then
+    begin
+      ShowError(Format('Not connected to the application of this report (%s on %s). Connect to it again.',
+        [ExtractFileName(JStr(FReport, 'process.exe')), JStr(FReport, 'process.computer')]));
+      Exit;
+    end;
+    // Where the inspector looks for the control first
+    Request.AddPair('hwnd', TJSONNumber.Create(Int64(Wnd)));
+    Exit(StartRemoteRequest(Request, OnDone));
+  end;
   if not IsWindow(Wnd) then
   begin
     ShowError('The target window no longer exists. Pick the control again.');
@@ -809,12 +864,27 @@ begin
     end;
   end;
   Result := True;
-  if Request.GetValue('address') = nil then
-    Request.AddPair('address', JStr(FReport, 'control.address'));
   ShowInfo('Sending to ' + DescribeWindow(Wnd) + ' ...');
   Screen.Cursor := crHourGlass;
   FRunner := TInjectRunner.Create(Format('"%s" --hwnd %d --request -', [Injector, NativeUInt(Wnd)]),
     TEncoding.UTF8.GetBytes(Request.ToJSON), OnDone);
+end;
+
+// Sends Request to the connected VclSpy.Server
+function TfrmMain.StartRemoteRequest(Request: TJSONObject; OnDone: TNotifyEvent): Boolean;
+begin
+  Result := False;
+  if FRunner <> nil then
+    Exit;
+  if not RemoteConnected then
+  begin
+    ShowError('Not connected to an application. Connect to one first.');
+    Exit;
+  end;
+  ShowInfo('Sending to ' + FClient.Server.Caption + ' ...');
+  Screen.Cursor := crHourGlass;
+  FRunner := TRemoteRunner.Create(FClient, Request.ToJSON, OnDone);
+  Result := True;
 end;
 
 procedure TfrmMain.RequestDone(Sender: TObject);
@@ -824,7 +894,7 @@ var
 begin
   Screen.Cursor := crDefault;
   FRunner := nil;
-  Json := TInjectRunner(Sender).Output;
+  Json := TRequestRunner(Sender).Output;
   Name := FEditName;
   Text := FEditText;
   FEditName := '';
@@ -845,7 +915,7 @@ begin
     Exit;
   end;
 
-  ShowReport(Json, False);
+  ShowReport(Json, False, TRequestRunner(Sender).Server);
   Changed := JObj(FReport, 'changed');
   if Changed <> nil then
     ShowInfo(Format('%s.%s changed from "%s" to "%s"', [JStr(FReport, 'control.path'),
@@ -864,7 +934,7 @@ begin
   FRunner := nil;
   Address := FExpandAddress;
   FExpandAddress := '';
-  Reply := ParseReply(TInjectRunner(Sender).Output, Error);
+  Reply := ParseReply(TRequestRunner(Sender).Output, Error);
   try
     if Reply = nil then
     begin
@@ -896,12 +966,178 @@ var
 begin
   Screen.Cursor := crDefault;
   FRunner := nil;
-  Json := TInjectRunner(Sender).Output;
+  Json := TRequestRunner(Sender).Output;
   ParseReply(Json, Error).Free;
   if Error <> '' then
     ShowError(Error) // keep showing the last good report
   else
-    ShowReport(Json, True);
+  begin
+    ShowReport(Json, True, TRequestRunner(Sender).Server);
+    ShowInfo('Inspected ' + JStr(FReport, 'control.path'));
+  end;
+end;
+
+{ Remote targets }
+
+function TfrmMain.RemoteConnected: Boolean;
+begin
+  Result := (FClient <> nil) and FClient.Connected;
+end;
+
+procedure TfrmMain.UpdateRemoteUI;
+begin
+  if RemoteConnected then
+  begin
+    btnConnect.Caption := 'Disconnect';
+    lblHint.Caption := Format('Connected to %s. Forms... lists its forms; F6 inspects the control at ' +
+      'its mouse cursor.', [FClient.Server.Caption]);
+  end
+  else
+  begin
+    btnConnect.Caption := 'Connect...';
+    lblHint.Caption := FDefaultHint;
+  end;
+  lblHint.Hint := lblHint.Caption;
+  btnForms.Enabled := RemoteConnected;
+end;
+
+// On the main thread, after the server closed the connection
+procedure TfrmMain.ServerGone;
+begin
+  UpdateRemoteUI;
+  ShowError('The connection to the remote application was closed.');
+end;
+
+procedure TfrmMain.btnConnectClick(Sender: TObject);
+begin
+  // A TRemoteRunner uses the connection
+  if FRunner <> nil then
+    Exit;
+  if RemoteConnected then
+  begin
+    FClient.Disconnect;
+    UpdateRemoteUI;
+    ShowInfo('Disconnected.');
+    Exit;
+  end;
+  if FClient = nil then
+    try
+      FClient := TRemoteClient.Create;
+      FClient.OnDisconnected :=
+        procedure
+        begin
+          TThread.Queue(nil, ServerGone);
+        end;
+    except
+      on E: Exception do
+      begin
+        ShowError('App Tethering does not start: ' + E.Message);
+        Exit;
+      end;
+    end;
+  if not ConnectRemote(Self, FClient) then
+    Exit;
+  UpdateRemoteUI;
+  ShowInfo('Connected to ' + FClient.Server.Caption + '.');
+  btnFormsClick(nil);
+end;
+
+procedure TfrmMain.btnFormsClick(Sender: TObject);
+var
+  Request: TJSONObject;
+begin
+  Request := TJSONObject.Create;
+  try
+    Request.AddPair('op', 'forms');
+    StartRemoteRequest(Request, FormsDone);
+  finally
+    Request.Free;
+  end;
+end;
+
+procedure TfrmMain.PickRemote;
+var
+  Request: TJSONObject;
+begin
+  Request := TJSONObject.Create;
+  try
+    Request.AddPair('op', 'pick');
+    StartRemoteRequest(Request, SelectDone);
+  finally
+    Request.Free;
+  end;
+end;
+
+// Lists the forms in a menu below the Forms button, after the control at the
+// mouse cursor
+procedure TfrmMain.FormsDone(Sender: TObject);
+var
+  Reply, Form: TJSONObject;
+  Forms: TJSONArray;
+  Element: TJSONValue;
+  Error, Caption: string;
+  Item: TMenuItem;
+  P: TPoint;
+begin
+  Screen.Cursor := crDefault;
+  FRunner := nil;
+  Reply := ParseReply(TRequestRunner(Sender).Output, Error);
+  try
+    if Reply = nil then
+    begin
+      ShowError(Error);
+      Exit;
+    end;
+    FFormsMenu.Items.Clear;
+    FFormAddresses.Clear;
+    Item := TMenuItem.Create(FFormsMenu);
+    Item.Caption := Format('Control at the mouse cursor of %s'#9'F6', [JStr(Reply, 'process.computer')]);
+    Item.Tag := -1;
+    Item.OnClick := FormsMenuClick;
+    FFormsMenu.Items.Add(Item);
+    FFormsMenu.Items.NewBottomLine;
+    Forms := JArr(Reply, 'forms');
+    if Forms <> nil then
+      for Element in Forms do
+      begin
+        Form := Element as TJSONObject;
+        Caption := NameOrClass(Form);
+        if JStr(Form, 'caption') <> '' then
+          Caption := Caption + '   "' + JStr(Form, 'caption') + '"';
+        Item := TMenuItem.Create(FFormsMenu);
+        // No accelerators from "&" in names and captions
+        Item.Caption := StringReplace(Caption + ControlFlags(Form), '&', '&&', [rfReplaceAll]);
+        Item.Tag := FFormAddresses.Add(JStr(Form, 'address'));
+        Item.OnClick := FormsMenuClick;
+        FFormsMenu.Items.Add(Item);
+      end;
+    ShowInfo(Format('%s: %d forms', [FClient.Server.Caption, FFormAddresses.Count]));
+  finally
+    Reply.Free;
+  end;
+  P := btnForms.ClientToScreen(Point(0, btnForms.Height));
+  FFormsMenu.Popup(P.X, P.Y);
+end;
+
+procedure TfrmMain.FormsMenuClick(Sender: TObject);
+var
+  Index: Integer;
+  Request: TJSONObject;
+begin
+  Index := TMenuItem(Sender).Tag;
+  if Index < 0 then
+  begin
+    PickRemote;
+    Exit;
+  end;
+  Request := TJSONObject.Create;
+  try
+    Request.AddPair('op', 'get');
+    Request.AddPair('address', FFormAddresses[Index]);
+    StartRemoteRequest(Request, SelectDone);
+  finally
+    Request.Free;
+  end;
 end;
 
 procedure TfrmMain.FillEvents(Control: TJSONObject);
@@ -1166,6 +1402,11 @@ begin
   begin
     Key := 0;
     btnRefreshClick(nil);
+  end
+  else if (Key = VK_F6) and (Shift = []) and RemoteConnected then
+  begin
+    Key := 0;
+    PickRemote;
   end;
 end;
 
@@ -1233,7 +1474,7 @@ end;
 procedure TfrmMain.lbHistoryClick(Sender: TObject);
 begin
   if lbHistory.ItemIndex >= 0 then
-    ShowReport(FHistoryJson[lbHistory.ItemIndex], False);
+    ShowReport(FHistoryJson[lbHistory.ItemIndex], False, FHistoryServers[lbHistory.ItemIndex]);
 end;
 
 end.

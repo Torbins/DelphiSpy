@@ -54,6 +54,9 @@ begin
 {$IFDEF SIMPLESHAREMEM}
   Linking := Linking + ' SimpleShareMem';
 {$ENDIF}
+{$IFDEF VCLSPY_SERVER}
+  Linking := Linking + ' server';
+{$ENDIF}
   Caption := Format('VclSpy Test %d %s %s', [Trunc(CompilerVersion), Bitness, Linking]);
 
   // The DFM keeps these items in binary form

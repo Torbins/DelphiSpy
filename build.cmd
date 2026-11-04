@@ -10,11 +10,14 @@ if not defined BDS22 set "BDS22=C:\Program Files (x86)\Embarcadero\Studio\22.0"
 set "BIN=%ROOT%bin"
 set "TESTBIN=%ROOT%Test\bin"
 set "PKG=-LUrtl;vcl"
+rem Test targets that link VclSpy.Server (paths relative to Test)
+set "SERVER=-DVCLSPY_SERVER -U..\Server;..\Inspector;..\Common"
 
 echo === Tool\VclSpyManifest.rc
 "%BDS22%\bin\brcc32.exe" -fo"%ROOT%Tool\VclSpyManifest.res" "%ROOT%Tool\VclSpyManifest.rc" >nul || goto :fail
 
 call :dcc "%BDS22%" dcc32 Tool\VclSpy.dpr                   "%BIN%"     tool-x86     ""       || goto :fail
+call :dcc "%BDS22%" dcc32 Remote\VclSpyRemote.dpr           "%BIN%"     remote-x86   ""       || goto :fail
 call :dcc "%BDS22%" dcc32 Inject\VclSpyInject.dpr           "%BIN%\x86" inject-x86   ""       || goto :fail
 call :dcc "%BDS22%" dcc64 Inject\VclSpyInject.dpr           "%BIN%\x64" inject-x64   ""       || goto :fail
 call :dcc "%BDS22%" dcc32 Hook\VclSpyHook.dpr               "%BIN%\x86" hook-x86     ""       || goto :fail
@@ -42,6 +45,10 @@ copy /y "%BDS22%\bin\borlndmm.dll" "%TESTBIN%\280-x86-sharemem\" >nul || goto :f
 call :dcc "%BDS22%" dcc64 Test\TestTarget.dpr "%TESTBIN%\280-x64-sharemem" test-280-x64-sharemem "-DSHAREMEM" || goto :fail
 copy /y "%BDS22%\bin64\borlndmm.dll" "%TESTBIN%\280-x64-sharemem\" >nul || goto :fail
 call :dcc "%BDS22%" dcc32 Test\TestTarget.dpr "%TESTBIN%\280-x86-simplesharemem" test-280-x86-simplesharemem "-DSIMPLESHAREMEM" || goto :fail
+rem Linking VclSpy.Server, for inspecting over the network: without and with runtime packages
+call :dcc "%BDS22%" dcc32 Test\TestTarget.dpr "%TESTBIN%\280-x86-server"     test-280-x86-server     "%SERVER%"        || goto :fail
+call :dcc "%BDS22%" dcc64 Test\TestTarget.dpr "%TESTBIN%\280-x64-server-pkg" test-280-x64-server-pkg "%PKG% %SERVER%" || goto :fail
+call :dcc "%BDS21%" dcc64 Test\TestTarget.dpr "%TESTBIN%\270-x64-server"     test-270-x64-server     "%SERVER%"        || goto :fail
 
 :done
 echo.

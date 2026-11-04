@@ -14,7 +14,10 @@ unit VclSpy.Target;
   classes are the target's own. So classes are compared by name, controls are
   found through the window property that every VCL module in the process sets
   ('Delphi' + process id), and forms by enumerating the process' windows.
-  CheckTarget makes sure that the target's VCL has this inspector's layout. }
+  CheckTarget makes sure that the target's VCL has this inspector's layout.
+
+  VclSpy.Server links the inspector into the target itself, which then works
+  like a package inspector: the VCL it sees is its own. }
 
 interface
 
@@ -257,5 +260,6 @@ begin
 end;
 
 initialization
-  FOwnVcl := FindClassHInstance(TControl) = HInstance;
+  // A package that links the VCL: not the target's module, nor its packages
+  FOwnVcl := ModuleIsPackage and (FindClassHInstance(TControl) = HInstance);
 end.

@@ -2,7 +2,7 @@ object frmMain: TfrmMain
   Left = 0
   Top = 0
   Caption = 'VclSpy - Delphi VCL control inspector'
-  ClientHeight = 660
+  ClientHeight = 668
   ClientWidth = 760
   Color = clBtnFace
   Constraints.MinHeight = 480
@@ -24,15 +24,18 @@ object frmMain: TfrmMain
     Left = 0
     Top = 0
     Width = 760
-    Height = 80
+    Height = 88
     Align = alTop
     BevelOuter = bvNone
     TabOrder = 0
     object lblHint: TLabel
       Left = 64
       Top = 10
-      Width = 420
+      Width = 488
       Height = 15
+      Anchors = [akLeft, akTop, akRight]
+      AutoSize = False
+      EllipsisPosition = epEndEllipsis
       Caption = 
         'Drag the finder onto a control in a Delphi VCL application built' +
         ' with runtime packages.'
@@ -40,8 +43,8 @@ object frmMain: TfrmMain
     object lblTarget: TLabel
       Left = 64
       Top = 34
-      Width = 480
-      Height = 40
+      Width = 488
+      Height = 48
       Anchors = [akLeft, akTop, akRight]
       AutoSize = False
       EllipsisPosition = epEndEllipsis
@@ -85,10 +88,35 @@ object frmMain: TfrmMain
       TabOrder = 3
       OnClick = btnCopyJsonClick
     end
+    object btnConnect: TButton
+      Left = 560
+      Top = 58
+      Width = 92
+      Height = 25
+      Hint = 'Inspect an application on another computer that links VclSpy.Server'
+      Anchors = [akTop, akRight]
+      Caption = 'Connect...'
+      TabOrder = 4
+      OnClick = btnConnectClick
+    end
+    object btnForms: TButton
+      Left = 658
+      Top = 58
+      Width = 92
+      Height = 25
+      Hint = 
+        'The forms of the connected application, and its control at the ' +
+        'mouse cursor (F6)'
+      Anchors = [akTop, akRight]
+      Caption = 'Forms...'
+      Enabled = False
+      TabOrder = 5
+      OnClick = btnFormsClick
+    end
   end
   object pnlSummary: TPanel
     Left = 0
-    Top = 80
+    Top = 88
     Width = 760
     Height = 232
     Align = alTop
@@ -231,7 +259,7 @@ object frmMain: TfrmMain
   end
   object pgcDetails: TPageControl
     Left = 0
-    Top = 312
+    Top = 320
     Width = 760
     Height = 329
     ActivePage = tabProperties
@@ -451,7 +479,7 @@ object frmMain: TfrmMain
   end
   object sbStatus: TStatusBar
     Left = 0
-    Top = 641
+    Top = 649
     Width = 760
     Height = 19
     Panels = <>

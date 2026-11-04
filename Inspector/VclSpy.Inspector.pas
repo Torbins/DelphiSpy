@@ -15,7 +15,13 @@ unit VclSpy.Inspector;
   and "value" (text, as reports show values). Both reply with a fresh report
   of the control; "set" adds "changed" with the old and new value.
   VclSpy.Members and VclSpy.Properties decide what can be edited. Op "children" replies with
-  just "address" and "children", the control's direct children. }
+  just "address" and "children", the control's direct children.
+
+  Two ops need no address: "forms" replies with "forms", the target's forms
+  (parentless windowed controls), and "pick" reports the control at the
+  mouse cursor, or at "x" and "y" (physical screen coordinates) if given.
+  VclSpy uses them for targets it connects to over the network (VclSpy.Server),
+  whose windows it can't drag the finder onto. }
 
 interface
 
@@ -26,6 +32,15 @@ procedure VclSpyInspect(Wnd: HWND; X, Y: Integer; ReplyWnd: HWND); stdcall;
 procedure VclSpyRequest(Wnd: HWND; Request: PAnsiChar; ReplyWnd: HWND); stdcall;
 // Exported by the no-packages inspectors only
 function VclSpyProbe(Wnd: HWND): BOOL; stdcall;
+
+// The reply of VclSpyRequest as JSON, for VclSpy.Server. Wnd may be 0: the
+// control is then looked for in every form.
+function RequestReply(Wnd: HWND; const Request: string): string;
+
+var
+  // Set by VclSpy.Server, which links the inspector into the target; reports
+  // name it instead of the inspector DLL
+  LinkedInspectorName: string;
 
 implementation
 
@@ -606,36 +621,55 @@ begin
   AddStr(Result, 'exStyle', Format('$%.8x', [GetWindowLong(Wnd, GWL_EXSTYLE)]));
 end;
 
+function InspectorText: string;
+const
+  Platform = {$IFDEF WIN64}'Win64'{$ELSE}'Win32'{$ENDIF};
+begin
+  if LinkedInspectorName <> '' then
+    Result := Format('%s in %s (Delphi %.1f, %s)', [LinkedInspectorName,
+      ExtractFileName(ModulePath(HInstance)), CompilerVersion, Platform])
+  else if OwnVcl then
+    Result := Format('%s (Delphi %.1f, %s, no packages, memory manager: %s)',
+      [ExtractFileName(ModulePath(HInstance)), CompilerVersion, Platform, MemoryManagerText])
+  else
+    Result := Format('%s (Delphi %.1f, %s)', [ExtractFileName(ModulePath(HInstance)),
+      CompilerVersion, Platform]);
+end;
+
+// Ctrl may be nil (the forms reply)
+function ProcessJson(Ctrl: TControl): TJSONObject;
+begin
+  Result := TJSONObject.Create;
+  AddInt(Result, 'pid', GetCurrentProcessId);
+  AddStr(Result, 'exe', ParamStr(0));
+  if LinkedInspectorName <> '' then
+    AddStr(Result, 'computer', GetEnvironmentVariable('COMPUTERNAME'));
+  if OwnVcl then
+  begin
+    // The module that links the target's VCL: the exe, or a DLL with its own VCL
+    if Ctrl <> nil then
+      AddStr(Result, 'vclModule', ClassModuleName(TargetClass(Ctrl, TControl)));
+    AddStr(Result, 'memoryManager', MemoryManagerText);
+  end
+  else if MemoryManagerMode = mmLinked then
+    // Linked into a target without runtime packages
+    AddStr(Result, 'vclModule', ClassModuleName(TControl))
+  else
+    AddStr(Result, 'vclPackage', ClassModuleName(TControl));
+end;
+
 // Wnd is reported as "window": a window on the thread that owns Ctrl, for
 // VclSpy to send requests to
 function NewReport(Ctrl: TControl; Wnd: HWND): TJSONObject;
 var
   Mapping: TDpiMapping;
-  Process: TJSONObject;
 begin
   Mapping.Init(GetAncestor(Wnd, GA_ROOT));
   Result := TJSONObject.Create;
   try
     AddBool(Result, 'ok', True);
-    if OwnVcl then
-      AddStr(Result, 'inspector', Format('%s (Delphi %.1f, %s, no packages, memory manager: %s)',
-        [ExtractFileName(ModulePath(HInstance)), CompilerVersion, {$IFDEF WIN64}'Win64'{$ELSE}'Win32'{$ENDIF},
-        MemoryManagerText]))
-    else
-      AddStr(Result, 'inspector', Format('%s (Delphi %.1f, %s)', [ExtractFileName(ModulePath(HInstance)),
-        CompilerVersion, {$IFDEF WIN64}'Win64'{$ELSE}'Win32'{$ENDIF}]));
-    Process := TJSONObject.Create;
-    AddInt(Process, 'pid', GetCurrentProcessId);
-    AddStr(Process, 'exe', ParamStr(0));
-    if OwnVcl then
-    begin
-      // The module that links the target's VCL: the exe, or a DLL with its own VCL
-      AddStr(Process, 'vclModule', ClassModuleName(TargetClass(Ctrl, TControl)));
-      AddStr(Process, 'memoryManager', MemoryManagerText);
-    end
-    else
-      AddStr(Process, 'vclPackage', ClassModuleName(TControl));
-    Result.AddPair('process', Process);
+    AddStr(Result, 'inspector', InspectorText);
+    Result.AddPair('process', ProcessJson(Ctrl));
     Result.AddPair('window', WindowJson(Wnd));
     Result.AddPair('control', ControlJson(Ctrl, Mapping));
   except
@@ -740,6 +774,100 @@ begin
   Result := Fallback;
 end;
 
+// The target's forms, to browse a target that VclSpy can't drag the finder onto
+function FormsReply: string;
+var
+  Reply, Item: TJSONObject;
+  List: TJSONArray;
+  Form: TWinControl;
+begin
+  Reply := TJSONObject.Create;
+  try
+    AddBool(Reply, 'ok', True);
+    AddStr(Reply, 'inspector', InspectorText);
+    Reply.AddPair('process', ProcessJson(nil));
+    List := TJSONArray.Create;
+    Reply.AddPair('forms', List);
+    for Form in TargetForms do
+    begin
+      Item := TJSONObject.Create;
+      AddStr(Item, 'name', Form.Name);
+      AddStr(Item, 'className', Form.ClassName);
+      AddStr(Item, 'kind', ComponentKind(Form));
+      AddStr(Item, 'caption', Shorten(TControlAccess(Form).Text));
+      AddStr(Item, 'address', AddressText(Form));
+      AddBool(Item, 'visible', Form.Visible);
+      AddBool(Item, 'enabled', Form.Enabled);
+      if Form.HandleAllocated then
+        AddInt(Item, 'hwnd', Form.Handle);
+      AddInt(Item, 'childCount', ChildCount(Form));
+      List.AddElement(Item);
+    end;
+    Result := Reply.ToJSON;
+  finally
+    Reply.Free;
+  end;
+end;
+
+// The deepest window at a physical screen point, disabled ones included
+// (WindowFromPoint skips those), as VclSpy's finder resolves it. With
+// AtCursor, the window at the mouse cursor, whose position Pt returns.
+function WindowAtPhysicalPoint(var Pt: TPoint; AtCursor: Boolean): HWND;
+var
+  SetContext: TSetThreadDpiAwarenessContext;
+  Old: THandle;
+  Child: HWND;
+  ClientPt: TPoint;
+begin
+  // Physical coordinates, also in a DPI-unaware target
+  @SetContext := GetProcAddress(GetModuleHandle(user32), 'SetThreadDpiAwarenessContext');
+  Old := 0;
+  if Assigned(SetContext) then
+    Old := SetContext(DpiAwarenessPerMonitorV2);
+  try
+    if AtCursor then
+      GetCursorPos(Pt);
+    Result := WindowFromPoint(Pt);
+    if Result = 0 then
+      Exit;
+    Result := GetAncestor(Result, GA_ROOT);
+    repeat
+      ClientPt := Pt;
+      ScreenToClient(Result, ClientPt);
+      Child := ChildWindowFromPointEx(Result, ClientPt, CWP_SKIPINVISIBLE or CWP_SKIPTRANSPARENT);
+      if (Child = 0) or (Child = Result) then
+        Break;
+      Result := Child;
+    until False;
+  finally
+    if Old <> 0 then
+      SetContext(Old);
+  end;
+end;
+
+// Reports the control at the mouse cursor, or at "x" and "y"
+function PickReply(Request: TJSONObject): string;
+var
+  Pt: TPoint;
+  AtCursor: Boolean;
+  Wnd: HWND;
+  Pid: DWORD;
+  Where: string;
+begin
+  AtCursor := not (Request.TryGetValue<Integer>('x', Pt.X) and Request.TryGetValue<Integer>('y', Pt.Y));
+  Wnd := WindowAtPhysicalPoint(Pt, AtCursor);
+  if AtCursor then
+    Where := Format('the mouse cursor (%d, %d)', [Pt.X, Pt.Y])
+  else
+    Where := Format('%d, %d', [Pt.X, Pt.Y]);
+  if Wnd = 0 then
+    Exit(ErrorReport('There is no window at ' + Where + '.'));
+  GetWindowThreadProcessId(Wnd, Pid);
+  if Pid <> GetCurrentProcessId then
+    Exit(ErrorReport(Format('The window at %s is not one of %s.', [Where, ExtractFileName(ParamStr(0))])));
+  Result := BuildReport(Wnd, Pt);
+end;
+
 function HandleRequest(Wnd: HWND; const RequestJson: string): string;
 var
   Value: TJSONValue;
@@ -761,8 +889,12 @@ begin
       Exit(ErrorReport('The request is not a JSON object.'));
     Request := TJSONObject(Value);
     Op := Request.GetValue<string>('op', '');
+    if SameText(Op, 'forms') then
+      Exit(FormsReply);
+    if SameText(Op, 'pick') then
+      Exit(PickReply(Request));
     if not SameText(Op, 'get') and not SameText(Op, 'set') and not SameText(Op, 'children') then
-      Exit(ErrorReport(Format('Unknown request op "%s"; use "get", "set" or "children".', [Op])));
+      Exit(ErrorReport(Format('Unknown request op "%s"; use "get", "set", "children", "forms" or "pick".', [Op])));
     if not TryStrToUInt64(Request.GetValue<string>('address', ''), Address) then
       Exit(ErrorReport('The request needs "address", the control.address of a report.'));
 
@@ -847,15 +979,26 @@ begin
   SendReply(ReplyWnd, Json);
 end;
 
-procedure VclSpyRequest(Wnd: HWND; Request: PAnsiChar; ReplyWnd: HWND); stdcall;
+function RequestReply(Wnd: HWND; const Request: string): string;
 var
-  Json, Text: string;
+  Text: string;
 begin
   try
-    Text := UTF8ToString(Request);
+    Text := Request;
     if (Text <> '') and (Text[1] = #$FEFF) then
       Delete(Text, 1, 1); // BOM of a request file
-    Json := HandleRequest(Wnd, Text);
+    Result := HandleRequest(Wnd, Text);
+  except
+    Result := ErrorReport(ExceptionText);
+  end;
+end;
+
+procedure VclSpyRequest(Wnd: HWND; Request: PAnsiChar; ReplyWnd: HWND); stdcall;
+var
+  Json: string;
+begin
+  try
+    Json := RequestReply(Wnd, UTF8ToString(Request));
   except
     Json := ErrorReport(ExceptionText);
   end;

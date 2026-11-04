@@ -23,12 +23,13 @@ unit VclSpy.MemoryManager;
   isn't, because some unit ran before this one, the guard is used.
 
   In the package inspectors this unit does nothing: the rtl package already
-  gives them the target's memory manager. }
+  gives them the target's memory manager. Nor where VclSpy.Server links the
+  inspector into the target: it is the target's own memory manager. }
 
 interface
 
 type
-  TMemoryManagerMode = (mmPackage, mmBorlndMM, mmShared, mmGuarded);
+  TMemoryManagerMode = (mmPackage, mmLinked, mmBorlndMM, mmShared, mmGuarded);
 
 var
   MemoryManagerMode: TMemoryManagerMode;
@@ -70,6 +71,7 @@ function MemoryManagerText: string;
 begin
   case MemoryManagerMode of
     mmPackage: Result := 'rtl package';
+    mmLinked: Result := 'the target''s own';
     mmBorlndMM: Result := BorlndMM;
     mmShared: Result := 'shared by the target';
   else
@@ -229,6 +231,9 @@ end;
 initialization
   if not SystemInThisModule then
     MemoryManagerMode := mmPackage
+  else if not ModuleIsPackage then
+    // An exe or DLL that links the inspector (VclSpy.Server): the target itself
+    MemoryManagerMode := mmLinked
   else
   begin
     // A package that contains System is not a library to it, but the VCL must

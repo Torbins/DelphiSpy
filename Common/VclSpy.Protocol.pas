@@ -34,6 +34,20 @@ const
   VclSpyFinalizeExport = 'Finalize';
   VclSpyInjectExeName = 'VclSpyInject.exe';
 
+  // VclSpy.Server: App Tethering between VclSpy and a target that links the
+  // inspector, over the network. The server's TTetheringManager.Text starts
+  // with VclSpyServerTextPrefix, and its profile is in VclSpyProfileGroup.
+  // Requests are JSON objects as for VclSpyRequest, plus "id" and "replyTo",
+  // the client's profile identifier, sent as UTF-8 streams described
+  // VclSpyRequestDescription. The reply goes back as a stream described
+  // VclSpyReplyDescription + id.
+  VclSpyServerTextPrefix = 'VclSpy server: ';
+  VclSpyClientText = 'VclSpy client';
+  VclSpyProfileGroup = 'VclSpy.v1';
+  VclSpyRequestDescription = 'VclSpy.Request';
+  VclSpyReplyDescription = 'VclSpy.Reply:';
+  VclSpyRemoteTimeout = 15000;
+
   // BPL suffixes of the Delphi versions the hook stub looks for, newest first.
   // An inspector named VclSpyInspect<suffix>.dll must exist for each one used,
   // and VclSpyInspectNoPkg<suffix>.dll for targets without runtime packages.

@@ -14,6 +14,8 @@ Shown for the picked control:
 
 Graphic controls (`TLabel`, `TSpeedButton`, `TImage`...) and disabled controls are found too. Delphi 10.4 (270) and 11 (280) targets are supported, both 32- and 64-bit.
 
+Applications on other computers of the network can be inspected too, if they link the unit `VclSpy.Server` (see [Inspecting over the network](#inspecting-over-the-network)).
+
 ## Editing properties
 
 Double-click a property (or select it and press Enter, or **Edit...**) to change it in the target. Gray properties are read-only. **Refresh** (F5) reads the control again.
@@ -39,6 +41,7 @@ Output:
 
 ```
 bin\VclSpy.exe                       UI (Win32, no packages)
+bin\VclSpyRemote.exe                 CLI client for applications that link VclSpy.Server
 bin\x86\  bin\x64\
     VclSpyInject.exe                 injector (also a CLI, see below)
     VclSpyHook.dll                   hook stub, no packages
@@ -74,6 +77,53 @@ A target that loads no `vclNNN.bpl` links the VCL statically, so it has its own 
 
 `process.vclModule` names the module that links the VCL the control belongs to (`process.vclPackage` with packages). Edits run some VCL code of the inspector's own VCL copy on the target's control (`TControl.SetText`, `SetAlign`...), so global VCL state (`Screen`, `Application`, styles) seen by that code is the inspector's, not the target's.
 
+## Inspecting over the network
+
+VclSpy can't drag its finder onto a window on another computer, nor inject anything there. Instead, the application links the unit `Server\VclSpy.Server.pas`, which runs an [App Tethering](https://docwiki.embarcadero.com/RADStudio/en/Using_App_Tethering) server inside it:
+
+1. Add `VclSpy.Server` to the uses clause of the application's `.dpr` (or of any of its units), and VclSpy's `Server`, `Inspector` and `Common` folders to the project's search path. Keep it out of release builds:
+
+   ```pascal
+   uses
+   {$IFDEF DEBUG}
+     VclSpy.Server,
+   {$ENDIF}
+     Vcl.Forms,
+   ```
+
+2. Run the application. The server starts once the main message loop runs.
+3. In VclSpy, click **Connect...**. It lists the applications with `VclSpy.Server` on the local network (exe, process ID, computer, address). For a computer in another network, type its name or IP address (several, separated by `;`; an address ending in `.0` searches its /24 network) and click **Search**. Select one and **Connect**.
+4. **Forms...** lists the application's forms; pick one to inspect it, then browse its controls on the **Parents** tab. **F6** (or the first item of the Forms menu) inspects the control at the mouse cursor of the remote computer, for whoever sits there, or when you control it over remote desktop. Properties are read and edited as for local targets.
+
+The unit links VclSpy's inspector into the application, so nothing is injected: the inspector sees the application's own VCL. That works with and without runtime packages, with any memory manager, for 32- and 64-bit, and for any Delphi version the inspector compiles with (10.4 and 11 are tested). VclSpy and the application may be built with different Delphi versions.
+
+Settings, made in the `.dpr` before `Application.Run`, or with environment variables of the application:
+
+| Variable | Environment | |
+|---|---|---|
+| `VclSpyServerPassword` | `VCLSPY_PASSWORD` | Password VclSpy must give to connect (pairing password of App Tethering). |
+| `VclSpyServerEnabled` | `VCLSPY_SERVER=0` | `False` keeps the server from starting. |
+
+`StartVclSpyServer` and `StopVclSpyServer` start and stop it at any time.
+
+- **Firewall.** App Tethering uses UDP and TCP ports 2020–2039 for discovery and pairing, and TCP ports 2040–2110 for connections, in both directions: the server connects back to VclSpy to send its replies. The firewall on both computers must let the application and `VclSpy.exe` (or `VclSpyRemote.exe`) through; Windows asks for each the first time it listens. If replies time out while the application responds, check the firewall on VclSpy's side.
+- **Security.** Anyone who can reach the application and knows the password (if one is set) can read and change its controls' properties. The traffic is not encrypted. Use it on trusted networks and in debug builds only.
+- Requests run on the application's GUI thread, from its message loop, like requests through the hook. If the GUI thread is busy, or a setter shows a modal dialog, the request times out after 15 seconds.
+- Up to 20 App Tethering applications can run on one computer (one port each in 2020–2039).
+
+Op `forms` lists the forms, and op `pick` reports the control at the mouse cursor, or at `"x"` and `"y"` (physical screen coordinates of the remote computer). Both need no address and work through `VclSpyInject.exe` too.
+
+`bin\VclSpyRemote.exe` is the CLI counterpart of `VclSpyInject.exe` for such applications. `--list` prints the servers found; `--request` sends each line of a file or of stdin as a request, and prints each reply on a line:
+
+```bat
+bin\VclSpyRemote.exe --list
+bin\VclSpyRemote.exe --list --hosts testpc;192.168.5.0
+echo {"op":"forms"} | bin\VclSpyRemote.exe --server TestTarget.exe --password secret --request -
+echo {"op":"set","address":"$02A41B20","property":"Caption","value":"Save all"} | bin\VclSpyRemote.exe --server "PID 1234," --request -
+```
+
+`--server` picks the server whose description (`TestTarget.exe, PID 1234, TESTPC`) or address contains the text, or by its number in the list. The exit code is 0 if every reply has `"ok":true`.
+
 ## CLI / scripting
 
 ```bat
@@ -108,7 +158,7 @@ echo {"op":"set","address":"$02A41B20","property":"Panels[0].Text","value":"Read
 
 ## Tests
 
-`Test\run-tests.ps1` starts the test targets: 10.4/11 × x86/x64 with packages, and without packages (plain, with `ShareMem` and with `SimpleShareMem`). It inspects their controls through the CLI, edits some of their properties, checks the JSON, and checks that each target still closes normally:
+`Test\run-tests.ps1` starts the test targets: 10.4/11 × x86/x64 with packages, and without packages (plain, with `ShareMem` and with `SimpleShareMem`). It inspects their controls through the CLI, edits some of their properties, checks the JSON, and checks that each target still closes normally. Targets that link `VclSpy.Server` (11 x86 without packages, 11 x64 with packages, 10.4 x64 without packages) are inspected the same way through `VclSpyRemote.exe`, over the loopback address, with a password:
 
 ```bat
 powershell -ExecutionPolicy Bypass -File Test\run-tests.ps1

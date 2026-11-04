@@ -1,5 +1,7 @@
 # Starts every TestTarget variant, inspects its controls through
-# bin\<arch>\VclSpyInject.exe and checks the JSON replies.
+# bin\<arch>\VclSpyInject.exe and checks the JSON replies. The variants that
+# link VclSpy.Server are inspected over the network, through
+# bin\VclSpyRemote.exe.
 # Run build.cmd first. Usage: powershell -ExecutionPolicy Bypass -File Test\run-tests.ps1
 
 $ErrorActionPreference = 'Stop'
@@ -20,6 +22,7 @@ public static class Win {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetWindowText(IntPtr wnd, StringBuilder s, int n);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindow(string cls, string title);
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr wnd, out RECT rect);
+    [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
 
     static string ClassOf(IntPtr wnd) { var s = new StringBuilder(256); GetClassName(wnd, s, s.Capacity); return s.ToString(); }
     static string TextOf(IntPtr wnd) { var s = new StringBuilder(256); GetWindowText(wnd, s, s.Capacity); return s.ToString(); }
@@ -38,6 +41,11 @@ public static class Win {
         SetThreadDpiAwarenessContext(new IntPtr(-4));
         RECT r; GetWindowRect(wnd, out r);
         return new int[] { (r.Left + r.Right) / 2, (r.Top + r.Bottom) / 2 };
+    }
+
+    public static void MoveCursor(int[] pt) {
+        SetThreadDpiAwarenessContext(new IntPtr(-4));
+        SetCursorPos(pt[0], pt[1]);
     }
 }
 '@
@@ -404,6 +412,84 @@ foreach ($v in $variants) {
         Check 'target exited' $proc.HasExited $false
 
         # The inspector stays loaded; the target must still end normally
+        [void]$proc.CloseMainWindow()
+        Check 'target closed' $proc.WaitForExit(8000) $true
+        Check 'target exit code' $proc.ExitCode 0
+    }
+    finally {
+        if (-not $proc.HasExited) { $proc.Kill() }
+    }
+}
+
+
+# Sends requests, one per line, to the VclSpy.Server whose description has
+# $Server, and returns the replies
+function Remote($Server, $Password, [object[]]$Bodies) {
+    $lines = ($Bodies | ForEach-Object { $_ | ConvertTo-Json -Compress }) -join "`n"
+    $out = $lines | & "$Root\bin\VclSpyRemote.exe" --server $Server --hosts 127.0.0.1 --password $Password --request -
+    return @($out | Where-Object { $_ } | ForEach-Object { $_ | ConvertFrom-Json })
+}
+
+$remoteVariants = @(
+    @{ Dir = '280-x86-server'; Title = 'VclSpy Test 35 x86 static server' },
+    @{ Dir = '280-x64-server-pkg'; Title = 'VclSpy Test 35 x64 packages server' },
+    @{ Dir = '270-x64-server'; Title = 'VclSpy Test 34 x64 static server' }
+)
+
+foreach ($v in $remoteVariants) {
+    Write-Host "== $($v.Title) (remote)"
+    $password = "pw-$($v.Dir)"
+    $env:VCLSPY_PASSWORD = $password
+    try { $proc, $form = Start-Target $v.Dir $v.Title }
+    finally { Remove-Item Env:VCLSPY_PASSWORD }
+    try {
+        $server = "PID $($proc.Id),"
+        $ok = Child $form 'TButton' 'OK'
+
+        $e = Remote $server 'wrong' @(@{ op = 'forms' })
+        CheckLike 'wrong password error' $e[0].error '*refused the password*'
+
+        [Win]::MoveCursor([Win]::Center($ok))
+        $pt = [Win]::Center((Child $form 'TPanel' 'LabelHost'))
+        $r = Remote $server $password @(
+            @{ op = 'forms' },
+            @{ op = 'pick' },
+            @{ op = 'pick'; x = $pt[0]; y = $pt[1] },
+            @{ op = 'pick'; x = -99999; y = -99999 })
+        Check 'replies' $r.Count 4
+        Check 'forms ok' $r[0].ok $true
+        CheckLike 'forms inspector' $r[0].inspector 'VclSpy.Server in TestTarget.exe*'
+        Check 'forms pid' $r[0].process.pid $proc.Id
+        Check 'forms computer' $r[0].process.computer $env:COMPUTERNAME
+        $f = $r[0].forms | Where-Object name -eq 'frmTest'
+        Check 'form className' $f.className 'TfrmTest'
+        Check 'form caption' $f.caption $v.Title
+        Check 'form hwnd' $f.hwnd $form.ToInt64()
+        Check 'form childCount' ($f.childCount -gt 0) $true
+        Check 'pick at cursor' $r[1].control.path 'frmTest.btnOk'
+        Check 'pick graphic control' $r[2].control.className 'TLabel'
+        CheckLike 'pick outside' $r[3].error '*no window at -99999, -99999*'
+
+        $btn = $r[1]
+        $r = Remote $server $password @(
+            @{ op = 'get'; address = $f.address },
+            @{ op = 'set'; address = $btn.control.address; hwnd = $btn.window.hwnd; property = 'Caption'; value = 'Remote OK' },
+            @{ op = 'set'; address = $btn.control.address; property = 'Font.Size'; value = '13' },
+            @{ op = 'children'; address = $f.address },
+            @{ op = 'set'; address = $btn.control.address; property = 'Tag'; value = 'x' },
+            @{ op = 'get'; address = '$1' })
+        Check 'replies' $r.Count 6
+        Check 'get form' $r[0].control.name 'frmTest'
+        CheckLike 'get form properties' $r[0].control.properties.Count '[1-9]*'
+        Check 'set Caption' $r[1].changed.newValue 'Remote OK'
+        Check 'set Caption text' $r[1].control.text 'Remote OK'
+        Check 'set Font.Size' (SubProp $r[2] 'Font.Size').value '13'
+        Check 'children has OK' (@($r[3].children | Where-Object name -eq 'btnOk').Count) 1
+        CheckLike 'bad value error' $r[4].error '*Cannot set Tag*'
+        CheckLike 'stale address error' $r[5].error '*no longer exists*'
+
+        Start-Sleep -Milliseconds 300
+        Check 'target exited' $proc.HasExited $false
         [void]$proc.CloseMainWindow()
         Check 'target closed' $proc.WaitForExit(8000) $true
         Check 'target exit code' $proc.ExitCode 0

@@ -1,28 +1,50 @@
 unit InjectRunner;
 
-{ Starts the VclSpyInject.exe that matches the target's bitness on a
-  background thread, optionally feeds it a request on stdin, and collects
-  the JSON it writes to stdout. }
+{ Runs requests to the inspector on background threads. TInjectRunner starts
+  the VclSpyInject.exe that matches the target's bitness, optionally feeds it
+  a request on stdin, and collects the JSON it writes to stdout.
+  TRemoteRunner sends a request to an application that links VclSpy.Server. }
 
 interface
 
 uses
-  Winapi.Windows, System.SysUtils, System.Classes, System.Types;
+  Winapi.Windows, System.SysUtils, System.Classes, System.Types, VclSpy.RemoteClient;
 
 type
-  TInjectRunner = class(TThread)
+  // Frees itself. OnDone runs on the main thread; read Output there.
+  TRequestRunner = class(TThread)
+  protected
+    FOutput: string;
+    FServer: string;
+  public
+    constructor Create(OnDone: TNotifyEvent);
+    // The JSON reply
+    property Output: string read FOutput;
+    // The TRemoteServer.ManagerId of a TRemoteRunner, '' for a TInjectRunner
+    property Server: string read FServer;
+  end;
+
+  TInjectRunner = class(TRequestRunner)
   private
     FCommandLine: string;
     FInput: TBytes;
-    FOutput: string;
   protected
     procedure Execute; override;
   public
-    // OnDone runs on the main thread; read Output there. Input goes to the
-    // injector's stdin (for --request -).
+    // Input goes to the injector's stdin (for --request -)
     constructor Create(const CommandLine: string; OnDone: TNotifyEvent); overload;
     constructor Create(const CommandLine: string; const Input: TBytes; OnDone: TNotifyEvent); overload;
-    property Output: string read FOutput;
+  end;
+
+  TRemoteRunner = class(TRequestRunner)
+  private
+    FClient: TRemoteClient;
+    FRequest: string;
+  protected
+    procedure Execute; override;
+  public
+    // Client must stay connected until OnDone
+    constructor Create(Client: TRemoteClient; const Request: string; OnDone: TNotifyEvent);
   end;
 
 // Checks that VclSpy can inspect the process that owns Wnd and returns the
@@ -120,19 +142,27 @@ begin
     raise Exception.CreateFmt('%s is missing.', [Result]);
 end;
 
-{ TInjectRunner }
+{ TRequestRunner }
 
-constructor TInjectRunner.Create(const CommandLine: string; OnDone: TNotifyEvent);
+constructor TRequestRunner.Create(OnDone: TNotifyEvent);
 begin
+  // Started by AfterConstruction, once the descendant's fields are set
   inherited Create(False);
-  FCommandLine := CommandLine;
   FreeOnTerminate := True;
   OnTerminate := OnDone;
 end;
 
+{ TInjectRunner }
+
+constructor TInjectRunner.Create(const CommandLine: string; OnDone: TNotifyEvent);
+begin
+  FCommandLine := CommandLine;
+  inherited Create(OnDone);
+end;
+
 constructor TInjectRunner.Create(const CommandLine: string; const Input: TBytes; OnDone: TNotifyEvent);
 begin
-  FInput := Input; // before the thread starts in the inherited constructor
+  FInput := Input;
   Create(CommandLine, OnDone);
 end;
 
@@ -204,6 +234,26 @@ begin
   except
     on E: Exception do
       FOutput := ErrorJson('Running ' + VclSpyInjectExeName + ' failed: ' + E.Message);
+  end;
+end;
+
+{ TRemoteRunner }
+
+constructor TRemoteRunner.Create(Client: TRemoteClient; const Request: string; OnDone: TNotifyEvent);
+begin
+  FClient := Client;
+  FRequest := Request;
+  FServer := Client.Server.ManagerId;
+  inherited Create(OnDone);
+end;
+
+procedure TRemoteRunner.Execute;
+begin
+  try
+    FOutput := FClient.Request(FRequest, VclSpyRemoteTimeout);
+  except
+    on E: Exception do
+      FOutput := ErrorJson('The request failed: ' + E.Message);
   end;
 end;
 
