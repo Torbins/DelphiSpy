@@ -2,7 +2,7 @@ object frmMain: TfrmMain
   Left = 0
   Top = 0
   Caption = 'VclSpy - Delphi VCL control inspector'
-  ClientHeight = 640
+  ClientHeight = 660
   ClientWidth = 760
   Color = clBtnFace
   Constraints.MinHeight = 480
@@ -24,7 +24,7 @@ object frmMain: TfrmMain
     Left = 0
     Top = 0
     Width = 760
-    Height = 60
+    Height = 80
     Align = alTop
     BevelOuter = bvNone
     TabOrder = 0
@@ -33,7 +33,7 @@ object frmMain: TfrmMain
       Top = 10
       Width = 420
       Height = 15
-      Caption =
+      Caption = 
         'Drag the finder onto a control in a Delphi VCL application built' +
         ' with runtime packages.'
     end
@@ -41,10 +41,11 @@ object frmMain: TfrmMain
       Left = 64
       Top = 34
       Width = 480
-      Height = 15
+      Height = 40
       Anchors = [akLeft, akTop, akRight]
       AutoSize = False
       EllipsisPosition = epEndEllipsis
+      WordWrap = True
     end
     object pnlFinder: TPanel
       Left = 10
@@ -87,7 +88,7 @@ object frmMain: TfrmMain
   end
   object pnlSummary: TPanel
     Left = 0
-    Top = 60
+    Top = 80
     Width = 760
     Height = 232
     Align = alTop
@@ -230,7 +231,7 @@ object frmMain: TfrmMain
   end
   object pgcDetails: TPageControl
     Left = 0
-    Top = 292
+    Top = 312
     Width = 760
     Height = 329
     ActivePage = tabProperties
@@ -257,12 +258,14 @@ object frmMain: TfrmMain
           OnChange = edtFilterChange
         end
         object btnEdit: TButton
+          AlignWithMargins = True
           Left = 588
           Top = 0
           Width = 80
           Height = 25
-          Hint = 'Change the selected property in the target (double-click or Enter)'
-          AlignWithMargins = True
+          Hint = 
+            'Change the selected property in the target (double-click or Ente' +
+            'r)'
           Margins.Left = 4
           Margins.Top = 0
           Margins.Right = 0
@@ -274,12 +277,12 @@ object frmMain: TfrmMain
           OnClick = btnEditClick
         end
         object btnRefresh: TButton
+          AlignWithMargins = True
           Left = 672
           Top = 0
           Width = 80
           Height = 25
           Hint = 'Read the control again (F5)'
-          AlignWithMargins = True
           Margins.Left = 4
           Margins.Top = 0
           Margins.Right = 0
@@ -296,10 +299,10 @@ object frmMain: TfrmMain
         Top = 25
         Width = 752
         Height = 274
-        Hint =
-          'Gray properties are read-only. Double-click a property to chang' +
-          'e it in the target, or an object or record property to unfold ' +
-          'its members.'
+        Hint = 
+          'Gray properties are read-only. Double-click a property to change' +
+          ' it in the target, or an object or record property to unfold its' +
+          ' members.'
         Align = alClient
         Columns = <
           item
@@ -448,7 +451,7 @@ object frmMain: TfrmMain
   end
   object sbStatus: TStatusBar
     Left = 0
-    Top = 621
+    Top = 641
     Width = 760
     Height = 19
     Panels = <>

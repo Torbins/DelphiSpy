@@ -535,8 +535,8 @@ begin
   FillOwners(Control);
   FillClasses(Control);
 
-  ShowInfo(Format('%s   PID %s   %s', [JStr(FReport, 'inspector'), JStr(FReport, 'process.pid'),
-    JStr(FReport, 'process.exe')]));
+  lblTarget.Caption := Format('%s   PID %s   %s', [JStr(FReport, 'inspector'), JStr(FReport, 'process.pid'),
+    JStr(FReport, 'process.exe')]);
 
   ScreenRect := JObj(Control, 'screenRect');
   if ScreenRect <> nil then
@@ -559,17 +559,13 @@ end;
 
 procedure TfrmMain.ShowError(const Msg: string);
 begin
-  lblTarget.Font.Color := clRed;
-  lblTarget.Caption := Msg;
-  lblTarget.Hint := Msg;
+  sbStatus.Font.Color := clRed;
   sbStatus.SimpleText := 'Error: ' + Msg;
 end;
 
 procedure TfrmMain.ShowInfo(const Msg: string);
 begin
-  lblTarget.Font.Color := clWindowText;
-  lblTarget.Caption := Msg;
-  lblTarget.Hint := Msg;
+  sbStatus.Font.Color := clWindowText;
   sbStatus.SimpleText := Msg;
 end;
 
