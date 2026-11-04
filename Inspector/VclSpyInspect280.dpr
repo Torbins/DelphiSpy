@@ -13,6 +13,8 @@ uses
   VclSpy.Target in 'VclSpy.Target.pas',
   VclSpy.Properties in 'VclSpy.Properties.pas',
   VclSpy.Members in 'VclSpy.Members.pas',
+  VclSpy.Report in 'VclSpy.Report.pas',
+  VclSpy.VclProperties in 'VclSpy.VclProperties.pas',
   VclSpy.Inspector in 'VclSpy.Inspector.pas';
 
 exports

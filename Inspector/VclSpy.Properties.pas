@@ -5,11 +5,15 @@ unit VclSpy.Properties;
   VclSpy.Inspector.
 
   Editable are published properties of simple types (numbers, characters,
-  strings, enumerations, sets of up to 32 elements) and the TControl and
-  TWinControl properties in ExtraProps. Those are declared public or
-  protected, so RTTI doesn't list them unless a class republishes them;
-  access classes reach them instead. VclSpy.Members reaches the properties of
-  objects and the fields of records that properties return.
+  strings, enumerations, sets of up to 32 elements) and the extra properties
+  that a framework's unit registers (RegisterExtraProp): VclSpy.VclProperties
+  adds the TControl and TWinControl properties declared public or protected,
+  which RTTI doesn't list unless a class republishes them. VclSpy.Members
+  reaches the properties of objects and the fields of records that properties
+  return.
+
+  This unit knows no framework. The names of integer types, such as TColor's
+  clRed, come from the framework's units too (RegisterOrdNames).
 
   A no-packages inspector that doesn't share the target's memory manager
   (VclSpy.Target.TargetMayKeepOurMemory) must not let the target keep a
@@ -22,27 +26,42 @@ unit VclSpy.Properties;
 interface
 
 uses
-  System.SysUtils, System.TypInfo, System.JSON, Vcl.Controls;
+  System.SysUtils, System.Classes, System.TypInfo, System.JSON;
 
 type
-  // A property that TControl or TWinControl declares public or protected.
-  // Ordinal values (Boolean, enumerations, small sets, integers) go through
-  // GetOrd/SetOrd, strings through GetStr/SetStr. No setter means read-only.
-  // KeepsString: SetStr stores the string in the control (in VCL code of the
-  // inspector), instead of handing the control's window a copy.
+  // A property of the instances of Cls that RTTI doesn't list, because it is
+  // declared public or protected (TControl.Caption). Ordinal values
+  // (Boolean, enumerations, small sets, integers) go through GetOrd/SetOrd,
+  // strings through GetStr/SetStr. No setter means read-only. KeepsString:
+  // SetStr stores the string in the object (in framework code of the
+  // inspector), instead of handing the object's window a copy.
   TExtraProp = record
     Name, Scope: string;
     Info: PTypeInfo;
-    WinControlOnly, KeepsString: Boolean;
-    GetOrd: TFunc<TControl, Integer>;
-    SetOrd: TProc<TControl, Integer>;
-    GetStr: TFunc<TControl, string>;
-    SetStr: TProc<TControl, string>;
-    function AppliesTo(Ctrl: TControl): Boolean;
+    Cls: TClass;
+    KeepsString: Boolean;
+    GetOrd: TFunc<TObject, Integer>;
+    SetOrd: TProc<TObject, Integer>;
+    GetStr: TFunc<TObject, string>;
+    SetStr: TProc<TObject, string>;
+    function AppliesTo(Obj: TObject): Boolean;
     function IsString: Boolean;
     function IsEditable: Boolean;
-    function ValueText(Ctrl: TControl): string;
-    procedure SetValueText(Ctrl: TControl; const Text: string);
+    function ValueText(Obj: TObject): string;
+    procedure SetValueText(Obj: TObject; const Text: string);
+  end;
+
+  // Value is the number that Text names (clRed), or that Text is
+  TTextToOrdFunc = reference to function(const Text: string; out Value: Integer): Boolean;
+
+  // Names for the values of an integer type (TColor: clRed)
+  TOrdNames = record
+    ToText: TFunc<Integer, string>;
+    FromText: TTextToOrdFunc;
+    // The names VclSpy's editor offers; may be nil
+    GetValues: TProc<TGetStrProc>;
+    // The message when FromText fails, with %s for the text
+    Error: string;
   end;
 
 function OrdToText(Info: PTypeInfo; Value: Int64): string;
@@ -71,8 +90,12 @@ function IsEditablePublished(Prop: PPropInfo): Boolean;
 // user when it can't be edited or the text doesn't fit its type
 procedure SetPublishedText(Instance: TObject; Prop: PPropInfo; const Text: string);
 
-// ExtraProps that Ctrl has and that its class doesn't publish
-function ExtraPropsOf(Ctrl: TControl): TArray<TExtraProp>;
+procedure RegisterExtraProp(const Prop: TExtraProp);
+// The extra properties of Obj that its class doesn't publish
+function ExtraPropsOf(Obj: TObject): TArray<TExtraProp>;
+
+// For the integer type named TypeName (TColor)
+procedure RegisterOrdNames(const TypeName: string; const Names: TOrdNames);
 
 // "integer", "enum", "set", "string"... for VclSpy's editor
 function KindName(Info: PTypeInfo): string;
@@ -83,11 +106,13 @@ function TypeValuesJson(Info: PTypeInfo): TJSONArray;
 implementation
 
 uses
-  System.Classes, System.UITypes, System.Variants, Vcl.Graphics, Vcl.Forms, Vcl.Menus, VclSpy.Target;
+  System.Variants, VclSpy.Target;
 
 type
-  TControlAccess = class(TControl);
-  TWinControlAccess = class(TWinControl);
+  TOrdNamesEntry = record
+    TypeName: string;
+    Names: TOrdNames;
+  end;
 
 const
   // Offset of StrRec.refCnt from the first character, on Win32 and Win64
@@ -95,6 +120,7 @@ const
 
 var
   ExtraProps: TArray<TExtraProp>;
+  OrdNames: TArray<TOrdNamesEntry>;
 
 { Text form }
 
@@ -103,21 +129,42 @@ begin
   Result := SameText(GetTypeName(Info), Name);
 end;
 
+procedure RegisterOrdNames(const TypeName: string; const Names: TOrdNames);
+var
+  Entry: TOrdNamesEntry;
+begin
+  Entry.TypeName := TypeName;
+  Entry.Names := Names;
+  OrdNames := OrdNames + [Entry];
+end;
+
+function FindOrdNames(Info: PTypeInfo; out Names: TOrdNames): Boolean;
+var
+  Entry: TOrdNamesEntry;
+begin
+  if Info^.Kind = tkInteger then
+    for Entry in OrdNames do
+      if IsType(Info, Entry.TypeName) then
+      begin
+        Names := Entry.Names;
+        Exit(True);
+      end;
+  Result := False;
+end;
+
 function IsDateTimeType(Info: PTypeInfo): Boolean;
 begin
   Result := IsType(Info, 'TDateTime') or IsType(Info, 'TDate') or IsType(Info, 'TTime');
 end;
 
 function OrdToText(Info: PTypeInfo; Value: Int64): string;
+var
+  Names: TOrdNames;
 begin
   case Info^.Kind of
     tkInteger:
-      if IsType(Info, 'TColor') then
-        Result := ColorToString(TColor(Value))
-      else if IsType(Info, 'TCursor') then
-        Result := CursorToString(TCursor(Value))
-      else if IsType(Info, 'TShortCut') then
-        Result := ShortCutToText(TShortCut(Value))
+      if FindOrdNames(Info, Names) then
+        Result := Names.ToText(Integer(Value))
       else if GetTypeData(Info)^.OrdType = otULong then
         Result := UIntToStr(Cardinal(Value))
       else
@@ -180,31 +227,20 @@ function TextToOrd(Info: PTypeInfo; const Text: string): Int64;
 var
   S: string;
   Ident: Integer;
+  Names: TOrdNames;
 begin
   S := Trim(Text);
   case Info^.Kind of
     tkInteger, tkInt64:
       begin
-        if IsType(Info, 'TColor') then
+        if FindOrdNames(Info, Names) then
         begin
-          if not IdentToColor(S, Ident) and not TryStrToInt(S, Ident) then
-            raise EConvertError.CreateFmt('"%s" is not a color. Use a name such as clRed or ' +
-              'clBtnFace, or a number such as $00FF8000 ($00BBGGRR).', [Text]);
-          Result := Ident;
-        end
-        else if IsType(Info, 'TCursor') then
-        begin
-          if not IdentToCursor(S, Ident) and not TryStrToInt(S, Ident) then
-            raise EConvertError.CreateFmt('"%s" is not a cursor. Use a name such as crHandPoint, ' +
-              'or a number.', [Text]);
-          Result := Ident;
-        end
-        else if IsType(Info, 'TShortCut') then
-        begin
-          Result := TextToShortCut(S);
-          if (Result = 0) and (S <> '') and not TryStrToInt64(S, Result) then
-            raise EConvertError.CreateFmt('"%s" is not a shortcut. Use text such as Ctrl+S, ' +
-              'or nothing for none.', [Text]);
+          if not Names.FromText(S, Ident) then
+            raise EConvertError.CreateFmt(Names.Error, [Text]);
+          if GetTypeData(Info)^.OrdType = otULong then
+            Result := Cardinal(Ident) // TAlphaColor
+          else
+            Result := Ident;
         end
         else if not TryStrToInt64(S, Result) then
           raise EConvertError.CreateFmt('"%s" is not an integer.', [Text]);
@@ -423,9 +459,9 @@ end;
 
 { TExtraProp }
 
-function TExtraProp.AppliesTo(Ctrl: TControl): Boolean;
+function TExtraProp.AppliesTo(Obj: TObject): Boolean;
 begin
-  Result := not WinControlOnly or IsKindOf(Ctrl, TWinControl);
+  Result := IsKindOf(Obj, Cls);
 end;
 
 function TExtraProp.IsString: Boolean;
@@ -438,15 +474,15 @@ begin
   Result := (Assigned(SetOrd) or Assigned(SetStr)) and (not KeepsString or TargetMayKeepOurMemory);
 end;
 
-function TExtraProp.ValueText(Ctrl: TControl): string;
+function TExtraProp.ValueText(Obj: TObject): string;
 begin
   if IsString then
-    Result := GetStr(Ctrl)
+    Result := GetStr(Obj)
   else
-    Result := OrdToText(Info, GetOrd(Ctrl));
+    Result := OrdToText(Info, GetOrd(Obj));
 end;
 
-procedure TExtraProp.SetValueText(Ctrl: TControl; const Text: string);
+procedure TExtraProp.SetValueText(Obj: TObject; const Text: string);
 begin
   if Assigned(SetStr) and not IsEditable then
     raise EConvertError.CreateFmt('%s cannot be edited: the inspector doesn''t share the target''s ' +
@@ -454,192 +490,24 @@ begin
   if not IsEditable then
     raise EConvertError.CreateFmt('%s is read-only.', [Name]);
   if IsString then
-    SetStr(Ctrl, Text)
+    SetStr(Obj, Text)
   else
-    SetOrd(Ctrl, Integer(TextToOrd(Info, Text)));
+    SetOrd(Obj, Integer(TextToOrd(Info, Text)));
 end;
 
-function ExtraPropsOf(Ctrl: TControl): TArray<TExtraProp>;
+procedure RegisterExtraProp(const Prop: TExtraProp);
+begin
+  ExtraProps := ExtraProps + [Prop];
+end;
+
+function ExtraPropsOf(Obj: TObject): TArray<TExtraProp>;
 var
   P: TExtraProp;
 begin
   Result := nil;
   for P in ExtraProps do
-    if P.AppliesTo(Ctrl) and (GetPropInfo(Ctrl, P.Name) = nil) then
+    if P.AppliesTo(Obj) and (GetPropInfo(Obj, P.Name) = nil) then
       Result := Result + [P];
-end;
-
-{ The TControl and TWinControl properties }
-
-procedure AddOrd(const Name, Scope: string; Info: PTypeInfo; WinControlOnly: Boolean;
-  const GetOrd: TFunc<TControl, Integer>; const SetOrd: TProc<TControl, Integer>);
-var
-  P: TExtraProp;
-begin
-  P := Default(TExtraProp);
-  P.Name := Name;
-  P.Scope := Scope;
-  P.Info := Info;
-  P.WinControlOnly := WinControlOnly;
-  P.GetOrd := GetOrd;
-  P.SetOrd := SetOrd;
-  ExtraProps := ExtraProps + [P];
-end;
-
-procedure AddStr(const Name, Scope: string; Info: PTypeInfo; WinControlOnly, KeepsString: Boolean;
-  const GetStr: TFunc<TControl, string>; const SetStr: TProc<TControl, string>);
-var
-  P: TExtraProp;
-begin
-  P := Default(TExtraProp);
-  P.Name := Name;
-  P.Scope := Scope;
-  P.Info := Info;
-  P.WinControlOnly := WinControlOnly;
-  P.KeepsString := KeepsString;
-  P.GetStr := GetStr;
-  P.SetStr := SetStr;
-  ExtraProps := ExtraProps + [P];
-end;
-
-function C(Ctrl: TControl): TControlAccess; inline;
-begin
-  Result := TControlAccess(Ctrl);
-end;
-
-function W(Ctrl: TControl): TWinControlAccess; inline;
-begin
-  Result := TWinControlAccess(Ctrl);
-end;
-
-// What TControl publishes itself (Left, Top, Width, Height, Hint, Cursor...)
-// comes from RTTI, like any published property.
-procedure RegisterExtraProps;
-const
-  AnyControl = False;
-  WinControl = True;
-  // SetText hands the window a copy (WM_SETTEXT); the others store the string
-  ByMessage = False;
-  Keeps = True;
-begin
-  // TControl, public
-  AddOrd('Visible', 'public', TypeInfo(Boolean), AnyControl,
-    function(X: TControl): Integer begin Result := Ord(X.Visible) end,
-    procedure(X: TControl; V: Integer) begin X.Visible := V <> 0 end);
-  AddOrd('Enabled', 'public', TypeInfo(Boolean), AnyControl,
-    function(X: TControl): Integer begin Result := Ord(X.Enabled) end,
-    procedure(X: TControl; V: Integer) begin X.Enabled := V <> 0 end);
-  AddOrd('Align', 'public', TypeInfo(TAlign), AnyControl,
-    function(X: TControl): Integer begin Result := Ord(X.Align) end,
-    procedure(X: TControl; V: Integer) begin X.Align := TAlign(V) end);
-  AddOrd('Anchors', 'public', TypeInfo(TAnchors), AnyControl,
-    function(X: TControl): Integer begin Result := Byte(X.Anchors) end,
-    procedure(X: TControl; V: Integer) begin X.Anchors := TAnchors(Byte(V)) end);
-  AddOrd('BiDiMode', 'public', TypeInfo(TBiDiMode), AnyControl,
-    function(X: TControl): Integer begin Result := Ord(X.BiDiMode) end,
-    procedure(X: TControl; V: Integer) begin X.BiDiMode := TBiDiMode(V) end);
-  AddOrd('ClientWidth', 'public', TypeInfo(Integer), AnyControl,
-    function(X: TControl): Integer begin Result := X.ClientWidth end,
-    procedure(X: TControl; V: Integer) begin X.ClientWidth := V end);
-  AddOrd('ClientHeight', 'public', TypeInfo(Integer), AnyControl,
-    function(X: TControl): Integer begin Result := X.ClientHeight end,
-    procedure(X: TControl; V: Integer) begin X.ClientHeight := V end);
-  AddOrd('ShowHint', 'public', TypeInfo(Boolean), AnyControl,
-    function(X: TControl): Integer begin Result := Ord(X.ShowHint) end,
-    procedure(X: TControl; V: Integer) begin X.ShowHint := V <> 0 end);
-  AddOrd('StyleElements', 'public', TypeInfo(TStyleElements), AnyControl,
-    function(X: TControl): Integer begin Result := Byte(X.StyleElements) end,
-    procedure(X: TControl; V: Integer) begin X.StyleElements := TStyleElements(Byte(V)) end);
-  AddStr('StyleName', 'public', TypeInfo(string), AnyControl, Keeps,
-    function(X: TControl): string begin Result := X.StyleName end,
-    procedure(X: TControl; V: string) begin X.StyleName := V end);
-
-  // TControl, protected
-  AddStr('Caption', 'protected', TypeInfo(TCaption), AnyControl, ByMessage,
-    function(X: TControl): string begin Result := C(X).Caption end,
-    procedure(X: TControl; V: string) begin C(X).Caption := V end);
-  AddStr('Text', 'protected', TypeInfo(TCaption), AnyControl, ByMessage,
-    function(X: TControl): string begin Result := C(X).Text end,
-    procedure(X: TControl; V: string) begin C(X).Text := V end);
-  AddOrd('Color', 'protected', TypeInfo(TColor), AnyControl,
-    function(X: TControl): Integer begin Result := C(X).Color end,
-    procedure(X: TControl; V: Integer) begin C(X).Color := V end);
-  AddOrd('ParentColor', 'protected', TypeInfo(Boolean), AnyControl,
-    function(X: TControl): Integer begin Result := Ord(C(X).ParentColor) end,
-    procedure(X: TControl; V: Integer) begin C(X).ParentColor := V <> 0 end);
-  AddOrd('ParentFont', 'protected', TypeInfo(Boolean), AnyControl,
-    function(X: TControl): Integer begin Result := Ord(C(X).ParentFont) end,
-    procedure(X: TControl; V: Integer) begin C(X).ParentFont := V <> 0 end);
-  AddOrd('ParentShowHint', 'protected', TypeInfo(Boolean), AnyControl,
-    function(X: TControl): Integer begin Result := Ord(C(X).ParentShowHint) end,
-    procedure(X: TControl; V: Integer) begin C(X).ParentShowHint := V <> 0 end);
-  AddOrd('ParentBiDiMode', 'protected', TypeInfo(Boolean), AnyControl,
-    function(X: TControl): Integer begin Result := Ord(C(X).ParentBiDiMode) end,
-    procedure(X: TControl; V: Integer) begin C(X).ParentBiDiMode := V <> 0 end);
-  AddOrd('AutoSize', 'protected', TypeInfo(Boolean), AnyControl,
-    function(X: TControl): Integer begin Result := Ord(C(X).AutoSize) end,
-    procedure(X: TControl; V: Integer) begin C(X).AutoSize := V <> 0 end);
-  AddOrd('DragMode', 'protected', TypeInfo(TDragMode), AnyControl,
-    function(X: TControl): Integer begin Result := Ord(C(X).DragMode) end,
-    procedure(X: TControl; V: Integer) begin C(X).DragMode := TDragMode(V) end);
-  AddOrd('DragKind', 'protected', TypeInfo(TDragKind), AnyControl,
-    function(X: TControl): Integer begin Result := Ord(C(X).DragKind) end,
-    procedure(X: TControl; V: Integer) begin C(X).DragKind := TDragKind(V) end);
-  AddOrd('DragCursor', 'protected', TypeInfo(TCursor), AnyControl,
-    function(X: TControl): Integer begin Result := C(X).DragCursor end,
-    procedure(X: TControl; V: Integer) begin C(X).DragCursor := V end);
-
-  // TWinControl, public
-  AddOrd('TabOrder', 'public', TypeInfo(TTabOrder), WinControl,
-    function(X: TControl): Integer begin Result := W(X).TabOrder end,
-    procedure(X: TControl; V: Integer) begin W(X).TabOrder := V end);
-  AddOrd('TabStop', 'public', TypeInfo(Boolean), WinControl,
-    function(X: TControl): Integer begin Result := Ord(W(X).TabStop) end,
-    procedure(X: TControl; V: Integer) begin W(X).TabStop := V <> 0 end);
-  AddOrd('DoubleBuffered', 'public', TypeInfo(Boolean), WinControl,
-    function(X: TControl): Integer begin Result := Ord(W(X).DoubleBuffered) end,
-    procedure(X: TControl; V: Integer) begin W(X).DoubleBuffered := V <> 0 end);
-  AddOrd('ParentDoubleBuffered', 'public', TypeInfo(Boolean), WinControl,
-    function(X: TControl): Integer begin Result := Ord(W(X).ParentDoubleBuffered) end,
-    procedure(X: TControl; V: Integer) begin W(X).ParentDoubleBuffered := V <> 0 end);
-  AddOrd('Showing', 'public', TypeInfo(Boolean), WinControl,
-    function(X: TControl): Integer begin Result := Ord(W(X).Showing) end,
-    nil);
-
-  // TWinControl, protected
-  AddOrd('BevelEdges', 'protected', TypeInfo(TBevelEdges), WinControl,
-    function(X: TControl): Integer begin Result := Byte(W(X).BevelEdges) end,
-    procedure(X: TControl; V: Integer) begin W(X).BevelEdges := TBevelEdges(Byte(V)) end);
-  AddOrd('BevelInner', 'protected', TypeInfo(TBevelCut), WinControl,
-    function(X: TControl): Integer begin Result := Ord(W(X).BevelInner) end,
-    procedure(X: TControl; V: Integer) begin W(X).BevelInner := TBevelCut(V) end);
-  AddOrd('BevelOuter', 'protected', TypeInfo(TBevelCut), WinControl,
-    function(X: TControl): Integer begin Result := Ord(W(X).BevelOuter) end,
-    procedure(X: TControl; V: Integer) begin W(X).BevelOuter := TBevelCut(V) end);
-  AddOrd('BevelKind', 'protected', TypeInfo(TBevelKind), WinControl,
-    function(X: TControl): Integer begin Result := Ord(W(X).BevelKind) end,
-    procedure(X: TControl; V: Integer) begin W(X).BevelKind := TBevelKind(V) end);
-  AddOrd('BevelWidth', 'protected', TypeInfo(TBevelWidth), WinControl,
-    function(X: TControl): Integer begin Result := W(X).BevelWidth end,
-    procedure(X: TControl; V: Integer) begin W(X).BevelWidth := V end);
-  AddOrd('BorderWidth', 'protected', TypeInfo(TBorderWidth), WinControl,
-    function(X: TControl): Integer begin Result := W(X).BorderWidth end,
-    procedure(X: TControl; V: Integer) begin W(X).BorderWidth := V end);
-  AddOrd('Ctl3D', 'protected', TypeInfo(Boolean), WinControl,
-    function(X: TControl): Integer begin Result := Ord(W(X).Ctl3D) end,
-    procedure(X: TControl; V: Integer) begin W(X).Ctl3D := V <> 0 end);
-  AddOrd('ParentCtl3D', 'protected', TypeInfo(Boolean), WinControl,
-    function(X: TControl): Integer begin Result := Ord(W(X).ParentCtl3D) end,
-    procedure(X: TControl; V: Integer) begin W(X).ParentCtl3D := V <> 0 end);
-  AddOrd('ParentBackground', 'protected', TypeInfo(Boolean), WinControl,
-    function(X: TControl): Integer begin Result := Ord(W(X).ParentBackground) end,
-    procedure(X: TControl; V: Integer) begin W(X).ParentBackground := V <> 0 end);
-  AddOrd('ImeMode', 'protected', TypeInfo(TImeMode), WinControl,
-    function(X: TControl): Integer begin Result := Ord(W(X).ImeMode) end,
-    procedure(X: TControl; V: Integer) begin W(X).ImeMode := TImeMode(V) end);
-  AddStr('ImeName', 'protected', TypeInfo(TImeName), WinControl, Keeps,
-    function(X: TControl): string begin Result := W(X).ImeName end,
-    procedure(X: TControl; V: string) begin W(X).ImeName := V end);
 end;
 
 { Editor support }
@@ -663,7 +531,7 @@ begin
 end;
 
 type
-  // GetColorValues and GetCursorValues call back a method
+  // TOrdNames.GetValues calls back a method
   TValueCollector = class
     Values: TJSONArray;
     procedure Add(const S: string);
@@ -694,6 +562,7 @@ end;
 function TypeValuesJson(Info: PTypeInfo): TJSONArray;
 var
   Collector: TValueCollector;
+  Names: TOrdNames;
 begin
   Result := nil;
   case Info^.Kind of
@@ -702,16 +571,13 @@ begin
     tkSet:
       Result := EnumValuesJson(GetTypeData(Info)^.CompType^);
     tkInteger:
-      if IsType(Info, 'TColor') or IsType(Info, 'TCursor') then
+      if FindOrdNames(Info, Names) and Assigned(Names.GetValues) then
       begin
         Result := TJSONArray.Create;
         Collector := TValueCollector.Create;
         try
           Collector.Values := Result;
-          if IsType(Info, 'TColor') then
-            GetColorValues(Collector.Add)
-          else
-            GetCursorValues(Collector.Add);
+          Names.GetValues(Collector.Add);
         finally
           Collector.Free;
         end;
@@ -719,6 +585,4 @@ begin
   end;
 end;
 
-initialization
-  RegisterExtraProps;
 end.

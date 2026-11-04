@@ -1,6 +1,6 @@
 @echo off
 rem Builds VclSpy and its test targets with the Delphi command-line compilers.
-rem   VclSpyInspect[NoPkg]270 and the 270 test targets: Delphi 10.4 (BDS 21.0)
+rem   VclSpyInspect[Fmx][NoPkg]270 and the 270 test targets: Delphi 10.4 (BDS 21.0)
 rem   everything else:                                  Delphi 11   (BDS 22.0)
 rem Set BDS21 / BDS22 to override the install folders.
 setlocal EnableExtensions
@@ -10,6 +10,9 @@ if not defined BDS22 set "BDS22=C:\Program Files (x86)\Embarcadero\Studio\22.0"
 set "BIN=%ROOT%bin"
 set "TESTBIN=%ROOT%Test\bin"
 set "PKG=-LUrtl;vcl"
+rem The FMX inspectors share the rtl package only; the FMX test targets use fmx too
+set "RTLPKG=-LUrtl"
+set "FMXPKG=-LUrtl;fmx"
 rem Test targets that link VclSpy.Server (paths relative to Test)
 set "SERVER=-DVCLSPY_SERVER -U..\Server;..\Inspector;..\Common"
 
@@ -30,6 +33,14 @@ call :dcc "%BDS22%" dcc32 Inspector\VclSpyInspectNoPkg280.dpk "%BIN%\x86" inspec
 call :dcc "%BDS22%" dcc64 Inspector\VclSpyInspectNoPkg280.dpk "%BIN%\x64" inspectnopkg280-x64 "" || goto :fail
 call :dcc "%BDS21%" dcc32 Inspector\VclSpyInspectNoPkg270.dpk "%BIN%\x86" inspectnopkg270-x86 "" || goto :fail
 call :dcc "%BDS21%" dcc64 Inspector\VclSpyInspectNoPkg270.dpk "%BIN%\x64" inspectnopkg270-x64 "" || goto :fail
+call :dcc "%BDS22%" dcc32 Inspector\VclSpyInspectFmx280.dpr "%BIN%\x86" inspectfmx280-x86 "%RTLPKG%" || goto :fail
+call :dcc "%BDS22%" dcc64 Inspector\VclSpyInspectFmx280.dpr "%BIN%\x64" inspectfmx280-x64 "%RTLPKG%" || goto :fail
+call :dcc "%BDS21%" dcc32 Inspector\VclSpyInspectFmx270.dpr "%BIN%\x86" inspectfmx270-x86 "%RTLPKG%" || goto :fail
+call :dcc "%BDS21%" dcc64 Inspector\VclSpyInspectFmx270.dpr "%BIN%\x64" inspectfmx270-x64 "%RTLPKG%" || goto :fail
+call :dcc "%BDS22%" dcc32 Inspector\VclSpyInspectFmxNoPkg280.dpk "%BIN%\x86" inspectfmxnopkg280-x86 "" || goto :fail
+call :dcc "%BDS22%" dcc64 Inspector\VclSpyInspectFmxNoPkg280.dpk "%BIN%\x64" inspectfmxnopkg280-x64 "" || goto :fail
+call :dcc "%BDS21%" dcc32 Inspector\VclSpyInspectFmxNoPkg270.dpk "%BIN%\x86" inspectfmxnopkg270-x86 "" || goto :fail
+call :dcc "%BDS21%" dcc64 Inspector\VclSpyInspectFmxNoPkg270.dpk "%BIN%\x64" inspectfmxnopkg270-x64 "" || goto :fail
 
 if /i "%~1"=="notests" goto :done
 call :dcc "%BDS21%" dcc32 Test\TestTarget.dpr "%TESTBIN%\270-x86"       test-270-x86       "%PKG%" || goto :fail
@@ -49,6 +60,16 @@ rem Linking VclSpy.Server, for inspecting over the network: without and with run
 call :dcc "%BDS22%" dcc32 Test\TestTarget.dpr "%TESTBIN%\280-x86-server"     test-280-x86-server     "%SERVER%"        || goto :fail
 call :dcc "%BDS22%" dcc64 Test\TestTarget.dpr "%TESTBIN%\280-x64-server-pkg" test-280-x64-server-pkg "%PKG% %SERVER%" || goto :fail
 call :dcc "%BDS21%" dcc64 Test\TestTarget.dpr "%TESTBIN%\270-x64-server"     test-270-x64-server     "%SERVER%"        || goto :fail
+rem FireMonkey: with and without packages, with ShareMem and SimpleShareMem, and linking VclSpy.FmxServer
+call :dcc "%BDS22%" dcc32 Test\FmxTestTarget.dpr "%TESTBIN%\fmx-280-x86"       test-fmx-280-x86       "%FMXPKG%" || goto :fail
+call :dcc "%BDS21%" dcc64 Test\FmxTestTarget.dpr "%TESTBIN%\fmx-270-x64"       test-fmx-270-x64       "%FMXPKG%" || goto :fail
+call :dcc "%BDS22%" dcc64 Test\FmxTestTarget.dpr "%TESTBIN%\fmx-280-x64-nopkg" test-fmx-280-x64-nopkg ""          || goto :fail
+call :dcc "%BDS21%" dcc32 Test\FmxTestTarget.dpr "%TESTBIN%\fmx-270-x86-nopkg" test-fmx-270-x86-nopkg ""          || goto :fail
+call :dcc "%BDS22%" dcc32 Test\FmxTestTarget.dpr "%TESTBIN%\fmx-280-x86-sharemem" test-fmx-280-x86-sharemem "-DSHAREMEM" || goto :fail
+copy /y "%BDS22%\bin\borlndmm.dll" "%TESTBIN%\fmx-280-x86-sharemem\" >nul || goto :fail
+call :dcc "%BDS22%" dcc64 Test\FmxTestTarget.dpr "%TESTBIN%\fmx-280-x64-simplesharemem" test-fmx-280-x64-simplesharemem "-DSIMPLESHAREMEM" || goto :fail
+call :dcc "%BDS22%" dcc32 Test\FmxTestTarget.dpr "%TESTBIN%\fmx-280-x86-server"     test-fmx-280-x86-server     "%SERVER%"           || goto :fail
+call :dcc "%BDS21%" dcc64 Test\FmxTestTarget.dpr "%TESTBIN%\fmx-270-x64-server-pkg" test-fmx-270-x64-server-pkg "%FMXPKG% %SERVER%" || goto :fail
 
 :done
 echo.
@@ -62,7 +83,7 @@ exit /b 1
 
 rem :dcc <bds root> <dcc32|dcc64> <dpr|dpk> <exe output dir> <dcu dir name> <extra options>
 rem A package goes to -LE (the no-packages inspectors are packages named .dll), its dcp to -LN.
-rem They contain the RTL and VCL implicitly: W1033 is expected for each of those units.
+rem They contain the RTL (and VCL) implicitly: W1033 is expected for each of those units.
 :dcc
 set "DCUDIR=%ROOT%dcu\%~5"
 if not exist "%~4" mkdir "%~4"

@@ -214,10 +214,13 @@ begin
     Result := Obj.GetValue<TJSONArray>(Path, nil);
 end;
 
+// FMX style objects have a StyleName rather than a name
 function NameOrClass(Obj: TJSONObject): string;
 begin
   Result := JStr(Obj, 'name');
-  if Result = '' then
+  if (Result = '') and (JStr(Obj, 'styleName') <> '') then
+    Result := '''' + JStr(Obj, 'styleName') + ''''
+  else if Result = '' then
     Result := '<unnamed>';
   Result := Result + ': ' + JStr(Obj, 'className');
 end;
@@ -229,6 +232,9 @@ begin
     Result := Result + '  [hidden]';
   if not Obj.GetValue<Boolean>('enabled', True) then
     Result := Result + '  [disabled]';
+  // Part of an FMX control's style
+  if Obj.GetValue<Boolean>('style', False) then
+    Result := Result + '  [style]';
 end;
 
 // The reply to a request, or nil with the reason in Error

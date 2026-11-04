@@ -1,0 +1,29 @@
+object fraFmxSample: TfraFmxSample
+  Size.Width = 280.000000000000000000
+  Size.Height = 100.000000000000000000
+  Size.PlatformDefault = False
+  object rctGoHost: TRectangle
+    Position.X = 8.000000000000000000
+    Position.Y = 8.000000000000000000
+    Size.Width = 120.000000000000000000
+    Size.Height = 40.000000000000000000
+    Size.PlatformDefault = False
+    object sbtnGo: TSpeedButton
+      Align = Client
+      Size.Width = 120.000000000000000000
+      Size.Height = 40.000000000000000000
+      Size.PlatformDefault = False
+      Text = 'Go'
+      OnClick = sbtnGoClick
+    end
+  end
+  object edtFrame: TEdit
+    Position.X = 140.000000000000000000
+    Position.Y = 8.000000000000000000
+    Size.Width = 120.000000000000000000
+    Size.Height = 28.000000000000000000
+    Size.PlatformDefault = False
+    TabOrder = 0
+    Text = 'Frame edit'
+  end
+end

@@ -1,7 +1,7 @@
 object frmMain: TfrmMain
   Left = 0
   Top = 0
-  Caption = 'VclSpy - Delphi VCL control inspector'
+  Caption = 'VclSpy - Delphi VCL and FireMonkey control inspector'
   ClientHeight = 668
   ClientWidth = 760
   Color = clBtnFace
@@ -37,8 +37,8 @@ object frmMain: TfrmMain
       AutoSize = False
       EllipsisPosition = epEndEllipsis
       Caption = 
-        'Drag the finder onto a control in a Delphi VCL application built' +
-        ' with runtime packages.'
+        'Drag the finder onto a control in a Delphi VCL or FireMonkey app' +
+        'lication.'
     end
     object lblTarget: TLabel
       Left = 64
@@ -93,7 +93,7 @@ object frmMain: TfrmMain
       Top = 58
       Width = 92
       Height = 25
-      Hint = 'Inspect an application on another computer that links VclSpy.Server'
+      Hint = 'Inspect an application on another computer that links VclSpy.Server or VclSpy.FmxServer'
       Anchors = [akTop, akRight]
       Caption = 'Connect...'
       TabOrder = 4

@@ -1,8 +1,11 @@
-# Starts every TestTarget variant, inspects its controls through
-# bin\<arch>\VclSpyInject.exe and checks the JSON replies. The variants that
-# link VclSpy.Server are inspected over the network, through
-# bin\VclSpyRemote.exe.
+# Starts every TestTarget and FmxTestTarget variant, inspects its controls
+# through bin\<arch>\VclSpyInject.exe and checks the JSON replies. The
+# variants that link VclSpy.Server (VclSpy.FmxServer) are inspected over the
+# network, through bin\VclSpyRemote.exe.
 # Run build.cmd first. Usage: powershell -ExecutionPolicy Bypass -File Test\run-tests.ps1
+# -Only <pattern> runs the variants whose folder in Test\bin matches it (fmx-*).
+
+param([string]$Only = '*')
 
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path $PSScriptRoot
@@ -23,6 +26,7 @@ public static class Win {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindow(string cls, string title);
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr wnd, out RECT rect);
     [DllImport("user32.dll")] static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr wnd, uint msg, IntPtr w, IntPtr l);
 
     static string ClassOf(IntPtr wnd) { var s = new StringBuilder(256); GetClassName(wnd, s, s.Capacity); return s.ToString(); }
     static string TextOf(IntPtr wnd) { var s = new StringBuilder(256); GetWindowText(wnd, s, s.Capacity); return s.ToString(); }
@@ -111,11 +115,11 @@ function Child([IntPtr]$Parent, $Cls, $Text) {
     return $w
 }
 
-function Start-Target($Dir, $Title) {
-    $exe = "$Root\Test\bin\$Dir\TestTarget.exe"
+function Start-Target($Dir, $Title, $Exe = 'TestTarget', $Class = 'TfrmTest') {
+    $exe = "$Root\Test\bin\$Dir\$Exe.exe"
     $proc = Start-Process $exe -PassThru
     for ($i = 0; $i -lt 50; $i++) {
-        $form = [Win]::FindWindow('TfrmTest', $Title)
+        $form = [Win]::FindWindow($Class, $Title)
         if ($form -ne [IntPtr]::Zero) { return @($proc, $form) }
         Start-Sleep -Milliseconds 100
     }
@@ -139,6 +143,7 @@ $variants = @(
 )
 
 foreach ($v in $variants) {
+    if ($v.Dir -notlike $Only) { continue }
     Write-Host "== $($v.Title)"
     $proc, $form = Start-Target $v.Dir $v.Title
     try {
@@ -422,6 +427,222 @@ foreach ($v in $variants) {
 }
 
 
+# FireMonkey: controls have no windows. Requests go to the form's window;
+# objects are found by name through "children", and picked at the center of
+# the screenRect a "get" reports.
+
+function FmxRequest($Arch, [IntPtr]$Form, [hashtable]$Body) {
+    $out = ($Body | ConvertTo-Json -Compress) | & "$Root\bin\$Arch\VclSpyInject.exe" --hwnd $Form.ToInt64() --request -
+    return ($out -join '') | ConvertFrom-Json
+}
+
+# The address of the object below $Address that the names lead to
+function FmxFind($Arch, [IntPtr]$Form, $Address, [string[]]$Names) {
+    foreach ($n in $Names) {
+        $c = FmxRequest $Arch $Form @{ op = 'children'; address = $Address }
+        $child = $c.children | Where-Object name -eq $n
+        if (-not $child) { throw "FMX object $n not found" }
+        $Address = $child.address
+    }
+    return $Address
+}
+
+function FmxGet($Arch, [IntPtr]$Form, $FormAddress, [string[]]$Names) {
+    return FmxRequest $Arch $Form @{ op = 'get'; address = (FmxFind $Arch $Form $FormAddress $Names) }
+}
+
+function RectCenter($Rect) {
+    return @([int](($Rect.left + $Rect.right) / 2), [int](($Rect.top + $Rect.bottom) / 2))
+}
+
+# Inspects the control at a physical screen point, as the finder would
+function InspectAt($Arch, [IntPtr]$Wnd, [int[]]$Pt) {
+    $out = & "$Root\bin\$Arch\VclSpyInject.exe" --hwnd $Wnd.ToInt64() --x $Pt[0] --y $Pt[1]
+    return ($out -join '') | ConvertFrom-Json
+}
+
+function PickCenter($Arch, [IntPtr]$Wnd, $Report) {
+    return InspectAt $Arch $Wnd (RectCenter $Report.control.screenRect)
+}
+
+function Close-FmxTarget($Proc, [IntPtr]$Form) {
+    # WM_CLOSE to the main form
+    [void][Win]::PostMessage($Form, 0x10, [IntPtr]::Zero, [IntPtr]::Zero)
+    Check 'target closed' $Proc.WaitForExit(8000) $true
+    Check 'target exit code' $Proc.ExitCode 0
+}
+
+# Inspector: the DLL the hook stub should load; Memory as for the VCL variants
+$fmxVariants = @(
+    @{ Dir = 'fmx-280-x86'; Arch = 'x86'; Title = 'VclSpy FMX Test 35 x86 packages'; Inspector = 'VclSpyInspectFmx280.dll'; Memory = $null },
+    @{ Dir = 'fmx-270-x64'; Arch = 'x64'; Title = 'VclSpy FMX Test 34 x64 packages'; Inspector = 'VclSpyInspectFmx270.dll'; Memory = $null },
+    @{ Dir = 'fmx-280-x64-nopkg'; Arch = 'x64'; Title = 'VclSpy FMX Test 35 x64 static'; Inspector = 'VclSpyInspectFmxNoPkg280.dll'; Memory = 'own, guarded' },
+    # 280 is tried first and refuses the 270 target
+    @{ Dir = 'fmx-270-x86-nopkg'; Arch = 'x86'; Title = 'VclSpy FMX Test 34 x86 static'; Inspector = 'VclSpyInspectFmxNoPkg270.dll'; Memory = 'own, guarded' },
+    @{ Dir = 'fmx-280-x86-sharemem'; Arch = 'x86'; Title = 'VclSpy FMX Test 35 x86 static ShareMem'; Inspector = 'VclSpyInspectFmxNoPkg280.dll'; Memory = 'borlndmm.dll' },
+    # The FMX inspectors can't finalize themselves before such an exe frees its memory: they guard their own
+    @{ Dir = 'fmx-280-x64-simplesharemem'; Arch = 'x64'; Title = 'VclSpy FMX Test 35 x64 static SimpleShareMem'; Inspector = 'VclSpyInspectFmxNoPkg280.dll'; Memory = 'own, guarded' }
+)
+
+foreach ($v in $fmxVariants) {
+    if ($v.Dir -notlike $Only) { continue }
+    Write-Host "== $($v.Title)"
+    $proc, $form = Start-Target $v.Dir $v.Title 'FmxTestTarget' 'FMTfrmFmxTest'
+    try {
+        $a = $v.Arch
+        $f = FmxRequest $a $form @{ op = 'forms' }
+        Check 'forms ok' $f.ok $true
+        CheckLike 'inspector' $f.inspector "$($v.Inspector)*"
+        Check 'framework' $f.process.framework 'FMX'
+        if ($v.Memory) { Check 'memory manager' $f.process.memoryManager $v.Memory }
+        $fi = $f.forms | Where-Object name -eq 'frmFmxTest'
+        Check 'form className' $fi.className 'TfrmFmxTest'
+        Check 'form caption' $fi.caption $v.Title
+        Check 'form hwnd' $fi.hwnd $form.ToInt64()
+        $fa = $fi.address
+
+        $r = FmxRequest $a $form @{ op = 'get'; address = $fa }
+        Check 'get form' $r.control.path 'frmFmxTest'
+        Check 'form text' $r.control.text $v.Title
+        Check 'form window' $r.window.hwnd $form.ToInt64()
+        Check 'form style object' (@($r.control.children | Where-Object style).Count) 1
+        if ($v.Memory) { Check 'FMX module' $r.process.fmxModule 'FmxTestTarget.exe' }
+        else { CheckLike 'FMX package' $r.process.fmxPackage 'fmx2?0.bpl' }
+
+        # Picking: dp to pixels and back
+        $ok = FmxGet $a $form $fa 'btnOk'
+        Check 'button text' $ok.control.text 'OK'
+        Check 'button bounds' "$($ok.control.bounds.left),$($ok.control.bounds.top),$($ok.control.bounds.width),$($ok.control.bounds.height)" '16,16,100,28'
+        $sr = $ok.control.screenRect
+        $scale = ($sr.right - $sr.left) / 100
+        Check 'button height in pixels' ([math]::Abs(($sr.bottom - $sr.top) - 28 * $scale) -le 1) $true
+        $lbl = FmxGet $a $form $fa 'lblInfo'
+        Check 'label offset in pixels' ([math]::Abs(($lbl.control.screenRect.left - $sr.left) - 116 * $scale) -le 1) $true
+        $p = PickCenter $a $form $ok
+        Check 'pick ok' $p.ok $true
+        Check 'pick button' $p.control.name 'btnOk'
+        Check 'pick button address' $p.control.address $ok.control.address
+        Check 'pick resolved from' $p.resolvedFrom 'frmFmxTest'
+        Check 'button OnClick' ($p.control.events | Where-Object name -eq 'OnClick').handler 'TfrmFmxTest.btnOkClick'
+        Check 'button unit' $p.control.unitName 'FMX.StdCtrls'
+        Check 'form unit' $p.control.form.unitName 'FmxTestMain'
+        Check 'form caption' $p.control.form.caption $v.Title
+        $style = @($p.control.children | Where-Object style)
+        Check 'button style object' $style.Count 1
+        $g = FmxRequest $a $form @{ op = 'get'; address = $style[0].address }
+        Check 'get style object' $g.control.style $true
+        Check 'style object parents' $g.control.parents[0].name 'btnOk'
+        $p = PickCenter $a $form $lbl
+        Check 'pick label (HitTest off)' $p.control.name 'lblInfo'
+        Check 'label class' $p.control.className 'TLabel'
+
+        $e = FmxGet $a $form $fa 'edtDisabled'
+        $p = PickCenter $a $form $e
+        Check 'pick disabled edit' $p.control.name 'edtDisabled'
+        Check 'disabled edit enabled' $p.control.enabled $false
+
+        # A frame
+        $go = FmxGet $a $form $fa 'lytHost', 'fraSample', 'rctGoHost', 'sbtnGo'
+        $p = PickCenter $a $form $go
+        Check 'speed button name' $p.control.name 'sbtnGo'
+        Check 'speed button path' $p.control.path 'frmFmxTest.fraSample.sbtnGo'
+        Check 'speed button parent path' $p.control.parentPath 'frmFmxTest.lytHost.fraSample.rctGoHost.sbtnGo'
+        Check 'speed button OnClick' ($p.control.events | Where-Object name -eq 'OnClick').handler 'TfraFmxSample.sbtnGoClick'
+        Check 'frame owner kind' $p.control.owners[0].kind 'frame'
+        Check 'parent children' (($p.control.parents[0].children | ForEach-Object name) -join ',') 'sbtnGo'
+        Check 'frame children' (($p.control.parents[1].children | ForEach-Object name) -join ',') 'rctGoHost,edtFrame'
+        $c = FmxRequest $a $form @{ op = 'children'; address = $p.control.parents[1].address }
+        Check 'children names' (($c.children | ForEach-Object name) -join ',') 'rctGoHost,edtFrame'
+        Check 'get parent by address' (FmxRequest $a $form @{ op = 'get'; address = $p.control.parents[2].address }).control.name 'lytHost'
+        $x = FmxRequest $a $form @{ op = 'children'; address = '$1' }
+        CheckLike 'stale address error' $x.error '*no longer exists*'
+
+        # A list box item, inside the list box's content
+        $lst = FmxGet $a $form $fa 'lstItems'
+        $lr = $lst.control.screenRect
+        $p = InspectAt $a $form @([int](($lr.left + $lr.right) / 2), [int]($lr.top + 8 * $scale))
+        Check 'pick list box item' $p.control.className 'TListBoxItem'
+        Check 'list box item text' $p.control.text 'First'
+
+        # An action
+        $p = PickCenter $a $form (FmxGet $a $form $fa 'btnAction')
+        Check 'action button text' $p.control.text 'Save'
+        Check 'action name' $p.control.action.name 'actSave'
+        Check 'action OnExecute' $p.control.action.onExecute.handler 'TfrmFmxTest.actSaveExecute'
+
+        # Editing
+        $r = $ok
+        Check 'Text editable' (Prop $r 'Text').editable $true
+        Check 'Name editable' (Prop $r 'Name').editable $false
+        Check 'AbsoluteRect kind' (Prop $r 'AbsoluteRect').kind 'record'
+        Check 'AbsoluteRect scope' (Prop $r 'AbsoluteRect').scope 'public'
+        Check 'AbsoluteRect value' (Prop $r 'AbsoluteRect').value ('(Left = 16, Top = 16, Right = 116, Bottom = 44, ' +
+            'TopLeft = (X = 16, Y = 16), BottomRight = (X = 116, Y = 44))')
+        Check 'AbsoluteRect.Left editable' (SubProp $r 'AbsoluteRect.Left').editable $false
+        Check 'ParentedVisible (public)' (Prop $r 'ParentedVisible').value 'True'
+        Check 'Canvas skipped' ($null -eq (Prop $r 'Canvas')) $true
+        Check 'Data skipped' ($null -eq (Prop $r 'Data')) $true
+        Check 'Align values' (@($r.control.types.TAlignLayout) -contains 'Client') $true
+        $s = SetProp $a $r 'Text' 'Changed'
+        Check 'set Text ok' $s.ok $true
+        Check 'set Text old value' $s.changed.oldValue 'OK'
+        Check 'set Text new value' $s.changed.newValue 'Changed'
+        Check 'set Text text' $s.control.text 'Changed'
+        $s = SetProp $a $s 'Position.X' '20'
+        Check 'set Position.X' $s.control.bounds.left 20
+        $s = SetProp $a $s 'Width' '110.5'
+        Check 'set Width' $s.control.bounds.width 110.5
+        $s = SetProp $a $s 'BoundsRect.Left' '24'
+        Check 'set BoundsRect.Left' $s.control.bounds.left 24
+        $s = SetProp $a $s 'Opacity' '0.5'
+        Check 'set Opacity' (Prop $s 'Opacity').value '0.5'
+        # The button's Font is TextSettings.Font, and reached through other paths too: its
+        # members are listed once, below the first
+        $s = SetProp $a $s 'TextSettings.Font.Size' '14'
+        Check 'set TextSettings.Font.Size' $s.changed.newValue '14'
+        CheckLike 'Font' (Prop $s 'Font').value '(TSettingsFont) *, 14'
+        $s = SetProp $a $s 'Cursor' 'crHandPoint'
+        Check 'set Cursor by name' (Prop $s 'Cursor').value 'crHandPoint'
+        $s = SetProp $a $s 'Enabled' 'False'
+        Check 'set Enabled' (Prop $s 'Enabled').value 'False'
+        $s = SetProp $a $s 'Enabled' 'True'
+        $e = SetProp $a $s 'Width' 'abc'
+        CheckLike 'bad number error' $e.error '*"abc" is not a number*'
+        $e = SetProp $a $s 'Align' 'Middle'
+        CheckLike 'bad enum error' $e.error '*Use one of:*Client*'
+        $e = SetProp $a $s 'Name' 'btnOther'
+        CheckLike 'Name error' $e.error '*cannot be edited*'
+        $e = SetProp $a $s 'AbsoluteRect.Left' '1'
+        CheckLike 'read-only record error' $e.error '*AbsoluteRect is read-only*'
+        $e = SetProp $a $s 'NoSuchProperty' '1'
+        CheckLike 'unknown property error' $e.error '*has no property NoSuchProperty*'
+        $s = SetProp $a $s 'Text' 'OK'
+        Check 'restore Text' $s.control.text 'OK'
+
+        # Colors
+        $rc = FmxGet $a $form $fa 'rctColor'
+        Check 'Fill' (Prop $rc 'Fill').value '(TBrush) Solid, Yellow'
+        Check 'Fill.Color' (SubProp $rc 'Fill.Color').value 'Yellow'
+        Check 'color values' (@($rc.control.types.TAlphaColor) -contains 'Red') $true
+        $s = SetProp $a $rc 'Fill.Color' 'Red'
+        Check 'set color by name' (SubProp $s 'Fill.Color').value 'Red'
+        $s = SetProp $a $s 'Fill.Color' 'claBlue'
+        Check 'set color by cla name' (SubProp $s 'Fill.Color').value 'Blue'
+        $s = SetProp $a $s 'Fill.Color' '#FF112233'
+        Check 'set color by number' (SubProp $s 'Fill.Color').value '#FF112233'
+        $e = SetProp $a $s 'Fill.Color' 'NoSuchColor'
+        CheckLike 'bad color error' $e.error '*is not a color*'
+
+        Start-Sleep -Milliseconds 300
+        Check 'target exited' $proc.HasExited $false
+        Close-FmxTarget $proc $form
+    }
+    finally {
+        if (-not $proc.HasExited) { $proc.Kill() }
+    }
+}
+
+
 # Sends requests, one per line, to the VclSpy.Server whose description has
 # $Server, and returns the replies
 function Remote($Server, $Password, [object[]]$Bodies) {
@@ -437,6 +658,7 @@ $remoteVariants = @(
 )
 
 foreach ($v in $remoteVariants) {
+    if ($v.Dir -notlike $Only) { continue }
     Write-Host "== $($v.Title) (remote)"
     $password = "pw-$($v.Dir)"
     $env:VCLSPY_PASSWORD = $password
@@ -493,6 +715,64 @@ foreach ($v in $remoteVariants) {
         [void]$proc.CloseMainWindow()
         Check 'target closed' $proc.WaitForExit(8000) $true
         Check 'target exit code' $proc.ExitCode 0
+    }
+    finally {
+        if (-not $proc.HasExited) { $proc.Kill() }
+    }
+}
+
+$remoteFmxVariants = @(
+    @{ Dir = 'fmx-280-x86-server'; Title = 'VclSpy FMX Test 35 x86 static server' },
+    @{ Dir = 'fmx-270-x64-server-pkg'; Title = 'VclSpy FMX Test 34 x64 packages server' }
+)
+
+foreach ($v in $remoteFmxVariants) {
+    if ($v.Dir -notlike $Only) { continue }
+    Write-Host "== $($v.Title) (remote)"
+    $password = "pw-$($v.Dir)"
+    $env:VCLSPY_PASSWORD = $password
+    try { $proc, $form = Start-Target $v.Dir $v.Title 'FmxTestTarget' 'FMTfrmFmxTest' }
+    finally { Remove-Item Env:VCLSPY_PASSWORD }
+    try {
+        $server = "PID $($proc.Id),"
+        # FMX starts the server later than the VCL: wait until it can be found
+        for ($i = 0; $i -lt 40; $i++) {
+            $list = & "$Root\bin\VclSpyRemote.exe" --list --hosts 127.0.0.1
+            if ("$list" -like "*$server*") { break }
+            Start-Sleep -Milliseconds 250
+        }
+        $e = Remote $server 'wrong' @(@{ op = 'forms' })
+        CheckLike 'wrong password error' $e[0].error '*refused the password*'
+        $r = Remote $server $password @(@{ op = 'forms' })
+        Check 'forms ok' $r[0].ok $true
+        CheckLike 'forms inspector' $r[0].inspector 'VclSpy.Server in FmxTestTarget.exe*'
+        Check 'forms framework' $r[0].process.framework 'FMX'
+        Check 'forms computer' $r[0].process.computer $env:COMPUTERNAME
+        $f = $r[0].forms | Where-Object name -eq 'frmFmxTest'
+        Check 'form caption' $f.caption $v.Title
+        Check 'form hwnd' $f.hwnd $form.ToInt64()
+
+        $r = Remote $server $password @(@{ op = 'children'; address = $f.address })
+        $ok = $r[0].children | Where-Object name -eq 'btnOk'
+        $r = Remote $server $password @(@{ op = 'get'; address = $ok.address })
+        $pt = RectCenter $r[0].control.screenRect
+        $r = Remote $server $password @(
+            @{ op = 'pick'; x = $pt[0]; y = $pt[1] },
+            @{ op = 'set'; address = $ok.address; hwnd = $f.hwnd; property = 'Text'; value = 'Remote OK' },
+            @{ op = 'set'; address = $ok.address; property = 'TextSettings.Font.Size'; value = '13' },
+            @{ op = 'set'; address = $ok.address; property = 'Tag'; value = 'x' },
+            @{ op = 'get'; address = '$1' })
+        Check 'replies' $r.Count 5
+        Check 'pick at point' $r[0].control.path 'frmFmxTest.btnOk'
+        Check 'set Text' $r[1].changed.newValue 'Remote OK'
+        Check 'set Text text' $r[1].control.text 'Remote OK'
+        Check 'set Font.Size' $r[2].changed.newValue '13'
+        CheckLike 'bad value error' $r[3].error '*Cannot set Tag*'
+        CheckLike 'stale address error' $r[4].error '*no longer exists*'
+
+        Start-Sleep -Milliseconds 300
+        Check 'target exited' $proc.HasExited $false
+        Close-FmxTarget $proc $form
     }
     finally {
         if (-not $proc.HasExited) { $proc.Kill() }

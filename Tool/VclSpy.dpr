@@ -1,10 +1,10 @@
 program VclSpy;
 
-{ Drag the finder onto a control of a Delphi VCL app built with runtime
-  packages; VclSpy injects an inspector into that process and shows the
-  control's name, class, owner/parent paths, properties and event handlers,
-  and can change simple properties of the control. Connect... inspects an
-  application on another computer that links VclSpy.Server.
+{ Drag the finder onto a control of a Delphi VCL or FireMonkey app; VclSpy
+  injects an inspector into that process and shows the control's name,
+  class, owner/parent paths, properties and event handlers, and can change
+  simple properties of the control. Connect... inspects an application on
+  another computer that links VclSpy.Server (VclSpy.FmxServer).
   Built as Win32 with Delphi 11, without runtime packages (see build.cmd). }
 
 uses

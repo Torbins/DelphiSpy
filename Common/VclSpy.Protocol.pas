@@ -28,6 +28,11 @@ const
   // VCL: Initialize and Finalize (exported by every package) initialize and
   // finalize their units.
   VclSpyNoPkgDllPrefix = 'VclSpyInspectNoPkg';
+  // The FMX inspectors: VclSpyInspectFmx<suffix>.dll for targets that load
+  // fmx<suffix>.bpl, VclSpyInspectFmxNoPkg<suffix>.dll for those that link
+  // FireMonkey statically (also packages that contain the RTL)
+  VclSpyFmxInspectDllPrefix = 'VclSpyInspectFmx';
+  VclSpyFmxNoPkgDllPrefix = 'VclSpyInspectFmxNoPkg';
   VclSpyProbeExport = 'VclSpyProbe';
   VclSpyActiveExport = 'VclSpyActive';
   VclSpyInitializeExport = 'Initialize';
@@ -50,7 +55,9 @@ const
 
   // BPL suffixes of the Delphi versions the hook stub looks for, newest first.
   // An inspector named VclSpyInspect<suffix>.dll must exist for each one used,
-  // and VclSpyInspectNoPkg<suffix>.dll for targets without runtime packages.
+  // and VclSpyInspectNoPkg<suffix>.dll for targets without runtime packages;
+  // VclSpyInspectFmx<suffix>.dll and VclSpyInspectFmxNoPkg<suffix>.dll for
+  // FireMonkey targets.
   VclSpyPackageSuffixes: array[0..3] of string = ('370', '290', '280', '270');
 
 type
@@ -58,8 +65,9 @@ type
   TVclSpyInspectProc = procedure(Wnd: HWND; X, Y: Integer; ReplyWnd: HWND); stdcall;
   // Exported by the inspector DLLs. Request is null-terminated UTF-8 JSON.
   TVclSpyRequestProc = procedure(Wnd: HWND; Request: PAnsiChar; ReplyWnd: HWND); stdcall;
-  // Exported by the no-packages inspector DLLs: True if the VCL control of Wnd
-  // (or of a parent window) is of the Delphi version the DLL was built with.
+  // Exported by the no-packages inspector DLLs: True if the VCL control (or
+  // FMX form) of Wnd, or of a parent window, is of the Delphi version the DLL
+  // was built with.
   TVclSpyProbeProc = function(Wnd: HWND): BOOL; stdcall;
   // Exported by the no-packages inspector DLLs: False once the target's
   // application window is gone and the DLL finalized itself.

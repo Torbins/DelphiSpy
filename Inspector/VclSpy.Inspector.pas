@@ -5,8 +5,8 @@ unit VclSpy.Inspector;
   packages only, so the VCL objects seen here are the target's own: Owner,
   Parent and RTTI can be walked directly. The no-packages inspectors link the
   VCL statically and see the target's objects as foreign ones of the same
-  layout; VclSpy.Target finds them and compares their classes by name, so
-  this unit uses IsKindOf instead of "is".
+  layout; this unit finds them through their windows, and VclSpy.Target
+  compares their classes by name, so this unit uses IsKindOf instead of "is".
 
   Requests (VclSpyRequest) are JSON objects with "op" and "address", the
   control.address of an earlier report (or of a parent or child listed in
@@ -21,7 +21,11 @@ unit VclSpy.Inspector;
   (parentless windowed controls), and "pick" reports the control at the
   mouse cursor, or at "x" and "y" (physical screen coordinates) if given.
   VclSpy uses them for targets it connects to over the network (VclSpy.Server),
-  whose windows it can't drag the finder onto. }
+  whose windows it can't drag the finder onto.
+
+  VclSpy.Report builds what doesn't depend on the VCL; VclSpy.VclProperties
+  registers what VclSpy.Properties and VclSpy.Members need to know about VCL
+  classes. }
 
 interface
 
@@ -37,129 +41,142 @@ function VclSpyProbe(Wnd: HWND): BOOL; stdcall;
 // control is then looked for in every form.
 function RequestReply(Wnd: HWND; const Request: string): string;
 
-var
-  // Set by VclSpy.Server, which links the inspector into the target; reports
-  // name it instead of the inspector DLL
-  LinkedInspectorName: string;
-
 implementation
 
 uses
   Winapi.Messages, System.Types, System.SysUtils, System.Classes, System.TypInfo,
   System.JSON, System.Generics.Collections,
-  Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.ComCtrls,
-  VclSpy.Protocol, VclSpy.Properties, VclSpy.Members, VclSpy.Target, VclSpy.MemoryManager;
+  Vcl.Controls, Vcl.Forms,
+  VclSpy.Protocol, VclSpy.Properties, VclSpy.Members, VclSpy.Target, VclSpy.MemoryManager,
+  VclSpy.Report, VclSpy.VclProperties;
 
 type
   TControlAccess = class(TControl);
 
-  TSetThreadDpiAwarenessContext = function(Context: THandle): THandle; stdcall;
+{ The target's controls }
 
-  // Maps between the target window's logical coordinates and the physical
-  // screen coordinates VclSpy works in (they differ for DPI-unaware targets).
-  TDpiMapping = record
-    Logical, Physical: TRect;
-    procedure Init(Wnd: HWND);
-    function ToLogical(const P: TPoint): TPoint;
-    function ToPhysical(const P: TPoint): TPoint;
-  end;
+// The VCL of the no-packages inspectors (OwnRtl) is not the target's: they
+// find controls through the window property that every VCL module in the
+// process sets ('Delphi' + process id), and forms by enumerating the
+// process' windows. CheckTarget makes sure that the target's VCL has this
+// inspector's layout.
 
+// False, with a message, when the VCL of Ctrl doesn't have this inspector's
+// layout: the target was built with another Delphi version
+function CheckTarget(Ctrl: TControl; out Error: string): Boolean;
 const
-  DpiAwarenessPerMonitorV2 = THandle(-4);
-  MaxValueLength = 300;
-  // Levels of object properties, collection items and record fields below
-  // the control's properties
-  MaxPropertyDepth = 4;
-
-procedure TDpiMapping.Init(Wnd: HWND);
+  Classes: array[0..2] of TClass = (TComponent, TControl, TWinControl);
 var
-  SetContext: TSetThreadDpiAwarenessContext;
-  Old: THandle;
+  Cls, Target: TClass;
+  Size, Props: Integer;
 begin
-  GetWindowRect(Wnd, Logical);
-  Physical := Logical;
-  @SetContext := GetProcAddress(GetModuleHandle(user32), 'SetThreadDpiAwarenessContext');
-  if not Assigned(SetContext) then
-    Exit;
-  Old := SetContext(DpiAwarenessPerMonitorV2);
-  if Old <> 0 then
-    try
-      GetWindowRect(Wnd, Physical);
-    finally
-      SetContext(Old);
+  for Cls in Classes do
+  begin
+    if (Cls = TWinControl) and not IsKindOf(Ctrl, TWinControl) then
+      Break;
+    Target := TargetClass(Ctrl, Cls);
+    if Target = nil then
+    begin
+      Error := Format('%s is not a VCL control: it doesn''t inherit from %s.', [Ctrl.ClassName, Cls.ClassName]);
+      Exit(False);
     end;
-end;
-
-function TDpiMapping.ToLogical(const P: TPoint): TPoint;
-begin
-  if (Physical.Width = 0) or (Physical.Height = 0) then
-    Exit(P);
-  Result.X := Logical.Left + MulDiv(P.X - Physical.Left, Logical.Width, Physical.Width);
-  Result.Y := Logical.Top + MulDiv(P.Y - Physical.Top, Logical.Height, Physical.Height);
-end;
-
-function TDpiMapping.ToPhysical(const P: TPoint): TPoint;
-begin
-  if (Logical.Width = 0) or (Logical.Height = 0) then
-    Exit(P);
-  Result.X := Physical.Left + MulDiv(P.X - Logical.Left, Physical.Width, Logical.Width);
-  Result.Y := Physical.Top + MulDiv(P.Y - Logical.Top, Physical.Height, Logical.Height);
-end;
-
-{ JSON helpers }
-
-procedure AddStr(Obj: TJSONObject; const Name, Value: string);
-begin
-  Obj.AddPair(Name, TJSONString.Create(Value));
-end;
-
-procedure AddInt(Obj: TJSONObject; const Name: string; Value: Int64);
-begin
-  Obj.AddPair(Name, TJSONNumber.Create(Value));
-end;
-
-procedure AddBool(Obj: TJSONObject; const Name: string; Value: Boolean);
-begin
-  Obj.AddPair(Name, TJSONBool.Create(Value));
-end;
-
-function RectJson(const R: TRect): TJSONObject;
-begin
-  Result := TJSONObject.Create;
-  AddInt(Result, 'left', R.Left);
-  AddInt(Result, 'top', R.Top);
-  AddInt(Result, 'right', R.Right);
-  AddInt(Result, 'bottom', R.Bottom);
-end;
-
-function ErrorReport(const Msg: string): string;
-var
-  Obj: TJSONObject;
-begin
-  Obj := TJSONObject.Create;
-  try
-    AddBool(Obj, 'ok', False);
-    AddStr(Obj, 'error', Msg);
-    Result := Obj.ToJSON;
-  finally
-    Obj.Free;
+    Size := Target.InstanceSize;
+    Props := GetTypeData(Target.ClassInfo)^.PropCount;
+    if (Size <> Cls.InstanceSize) or (Props <> GetTypeData(Cls.ClassInfo)^.PropCount) then
+    begin
+      Error := Format('The target''s VCL doesn''t match the inspector''s (Delphi %.1f): its %s has %d bytes ' +
+        'and %d published properties, the inspector''s %d and %d. The target may be built with another ' +
+        'Delphi version.', [CompilerVersion, Cls.ClassName, Size, Props, Cls.InstanceSize,
+        GetTypeData(Cls.ClassInfo)^.PropCount]);
+      Exit(False);
+    end;
   end;
+  Result := True;
+end;
+
+// The VCL control of Wnd, or nil. Check it with CheckTarget before use.
+function FindTargetControl(Wnd: HWND): TWinControl;
+var
+  Atom: TAtom;
+  Pid: DWORD;
+  P: Pointer;
+begin
+  if not OwnRtl then
+    Exit(FindControl(Wnd));
+  Result := nil;
+  if (Wnd = 0) or (GetWindowThreadProcessId(Wnd, Pid) = 0) or (Pid <> GetCurrentProcessId) then
+    Exit;
+  // Vcl.Controls sets this property for every window it creates, in every module
+  Atom := GlobalFindAtom(PChar(Format('Delphi%.8X', [GetCurrentProcessId])));
+  if Atom = 0 then
+    Exit;
+  P := Pointer(GetProp(Wnd, MakeIntAtom(Atom)));
+  if (P <> nil) and LooksLikeObject(P) and IsKindOf(TObject(P), TWinControl) then
+    Result := TWinControl(P);
+end;
+
+// The VCL control of Wnd or of its nearest parent window that has one
+function WindowControl(Wnd: HWND): TWinControl;
+begin
+  Result := nil;
+  while (Wnd <> 0) and (Result = nil) do
+  begin
+    Result := FindTargetControl(Wnd);
+    if Result = nil then
+      Wnd := GetParent(Wnd);
+  end;
+end;
+
+function CollectForm(Wnd: HWND; List: TList<TWinControl>): BOOL; stdcall;
+var
+  Ctrl: TWinControl;
+  Error: string;
+begin
+  try
+    Ctrl := FindTargetControl(Wnd);
+    if (Ctrl <> nil) and CheckTarget(Ctrl, Error) and (Ctrl.Parent = nil) then
+      List.Add(Ctrl);
+  except
+    // Not into EnumWindows
+  end;
+  Result := True;
+end;
+
+// The target's forms (in the no-packages inspectors, all parentless windowed
+// controls) that pass CheckTarget
+function TargetForms: TArray<TWinControl>;
+var
+  List: TList<TWinControl>;
+  I: Integer;
+begin
+  if not OwnRtl then
+  begin
+    SetLength(Result, Screen.CustomFormCount);
+    for I := 0 to Screen.CustomFormCount - 1 do
+      Result[I] := Screen.CustomForms[I];
+    Exit;
+  end;
+  List := TList<TWinControl>.Create;
+  try
+    EnumWindows(@CollectForm, LPARAM(List));
+    Result := List.ToArray;
+  finally
+    List.Free;
+  end;
+end;
+
+// GetParentForm(Ctrl, True)
+function TopParentForm(Ctrl: TControl): TCustomForm;
+begin
+  while Ctrl.Parent <> nil do
+    Ctrl := Ctrl.Parent;
+  if IsKindOf(Ctrl, TCustomForm) then
+    Result := TCustomForm(Ctrl)
+  else
+    Result := nil;
 end;
 
 { Naming }
-
-function ModulePath(Module: HMODULE): string;
-begin
-  if Module = 0 then
-    Result := ''
-  else
-    Result := GetModuleName(Module);
-end;
-
-function ClassModuleName(Cls: TClass): string;
-begin
-  Result := ExtractFileName(ModulePath(ModuleOf(Cls)));
-end;
 
 function DisplayName(C: TComponent): string;
 begin
@@ -167,18 +184,6 @@ begin
     Result := C.Name
   else
     Result := '<' + C.ClassName + '>';
-end;
-
-// Owner chain as written in code: Form.Frame.Component
-function ComponentPath(C: TComponent): string;
-begin
-  Result := DisplayName(C);
-  C := C.Owner;
-  while (C <> nil) and not IsKindOf(C, TApplication) do
-  begin
-    Result := DisplayName(C) + '.' + Result;
-    C := C.Owner;
-  end;
 end;
 
 // Visual nesting: Form.Panel.Frame.Panel.Control
@@ -190,280 +195,6 @@ begin
     C := C.Parent;
     Result := DisplayName(C) + '.' + Result;
   end;
-end;
-
-function ComponentKind(C: TComponent): string;
-begin
-  if IsKindOf(C, TCustomForm) then
-    Result := 'form'
-  else if IsKindOf(C, TCustomFrame) then
-    Result := 'frame'
-  else if IsKindOf(C, TDataModule) then
-    Result := 'dataModule'
-  else if IsKindOf(C, TControl) then
-    Result := 'control'
-  else
-    Result := 'component';
-end;
-
-function Shorten(const S: string): string;
-begin
-  if Length(S) > MaxValueLength then
-    Result := Copy(S, 1, MaxValueLength) + '...'
-  else
-    Result := S;
-end;
-
-{ Property values }
-
-function ObjectSummary(Obj: TObject): string;
-begin
-  if Obj = nil then
-    Result := '(nil)'
-  else if IsKindOf(Obj, TComponent) then
-    Result := ComponentPath(TComponent(Obj)) + ': ' + Obj.ClassName
-  else if IsKindOf(Obj, TCollection) then
-    Result := Format('(%s, Count = %d)', [Obj.ClassName, TCollection(Obj).Count])
-  else if IsKindOf(Obj, TStrings) then
-    Result := Format('(%s, Count = %d) %s', [Obj.ClassName, TStrings(Obj).Count,
-      Shorten(TStrings(Obj).CommaText)])
-  else if IsKindOf(Obj, TFont) then
-    Result := Format('(%s) %s, %d pt, %s', [Obj.ClassName, TFont(Obj).Name, TFont(Obj).Size,
-      ColorToString(TFont(Obj).Color)])
-  else if IsKindOf(Obj, TCollectionItem) then
-    Result := Format('(%s) %s', [Obj.ClassName, Shorten(TCollectionItem(Obj).DisplayName)])
-  else if IsKindOf(Obj, TListItems) then
-    Result := Format('(%s, Count = %d)', [Obj.ClassName, TListItems(Obj).Count])
-  else if IsKindOf(Obj, TTreeNodes) then
-    Result := Format('(%s, Count = %d)', [Obj.ClassName, TTreeNodes(Obj).Count])
-  else if IsKindOf(Obj, TListItem) then
-    Result := Format('(%s) %s', [Obj.ClassName, Shorten(TListItem(Obj).Caption)])
-  else if IsKindOf(Obj, TTreeNode) then
-    Result := Format('(%s) %s', [Obj.ClassName, Shorten(TTreeNode(Obj).Text)])
-  else
-    Result := '(' + Obj.ClassName + ')';
-end;
-
-// The full value; PropJson shortens it for the report
-function MemberText(const Member: TMember): string;
-begin
-  if Member.IsObject then
-    Result := ObjectSummary(Member.GetObject)
-  else
-    Result := Member.ValueText;
-end;
-
-{ Event handlers }
-
-function HandlerJson(const EventName: string; const Method: TMethod): TJSONObject;
-var
-  Obj: TObject;
-  Declaring: TClass;
-  Name: string;
-begin
-  Result := TJSONObject.Create;
-  AddStr(Result, 'name', EventName);
-  try
-    if Method.Data = nil then
-      AddStr(Result, 'handler', '(code without an object)')
-    else
-    begin
-      Obj := TObject(Method.Data);
-      Name := Obj.MethodName(Method.Code);
-      if Name = '' then
-      begin
-        AddStr(Result, 'handler', Obj.ClassName + '.? (not a published method)');
-        AddStr(Result, 'unitName', Obj.UnitName);
-      end
-      else
-      begin
-        // The class that introduces the handler, e.g. a base form of an inherited form
-        Declaring := Obj.ClassType;
-        while (Declaring.ClassParent <> nil) and (Declaring.ClassParent.MethodAddress(Name) = Method.Code) do
-          Declaring := Declaring.ClassParent;
-        AddStr(Result, 'handler', Declaring.ClassName + '.' + Name);
-        AddStr(Result, 'unitName', Declaring.UnitName);
-      end;
-      if IsKindOf(Obj, TComponent) then
-        AddStr(Result, 'instance', ComponentPath(TComponent(Obj)) + ': ' + Obj.ClassName)
-      else
-        AddStr(Result, 'instance', Obj.ClassName);
-    end;
-  except
-    AddStr(Result, 'handler', '<error: ' + ExceptionMessage + '>');
-  end;
-  AddStr(Result, 'address', Format('$%p', [Method.Code]));
-  AddStr(Result, 'module', ExtractFileName(ModulePath(ModuleOf(Method.Code))));
-end;
-
-{ Sections }
-
-function PropJson(const Name, Path: string; Info: PTypeInfo; const Value, Scope: string;
-  Editable: Boolean; Types: TJSONObject): TJSONObject;
-var
-  Values: TJSONArray;
-  TypeName: string;
-begin
-  TypeName := GetTypeName(Info);
-  Result := TJSONObject.Create;
-  AddStr(Result, 'name', Name);
-  AddStr(Result, 'path', Path);
-  AddStr(Result, 'type', TypeName);
-  AddStr(Result, 'kind', KindName(Info));
-  AddStr(Result, 'value', Shorten(Value));
-  if Length(Value) > MaxValueLength then
-    AddBool(Result, 'truncated', True);
-  AddStr(Result, 'scope', Scope);
-  AddBool(Result, 'editable', Editable);
-  // Names for VclSpy's editor, once per type
-  if Editable and (Types.GetValue(TypeName) = nil) then
-  begin
-    Values := TypeValuesJson(Info);
-    if Values <> nil then
-      Types.AddPair(TypeName, Values);
-  end;
-end;
-
-// A property, and below it, in "properties", the members of the object or
-// record it returns (VclSpy.Members). Expanded holds the objects whose
-// members are listed already: each object's are listed once.
-function MemberJson(const Member: TMember; const Path: string; Depth: Integer; Types: TJSONObject;
-  Expanded: TList<TObject>): TJSONObject;
-var
-  Value: string;
-  Obj: TObject;
-  Failed, Editable: Boolean;
-  Members: TArray<TMember>;
-  Child: TMember;
-  List: TJSONArray;
-begin
-  Obj := nil;
-  Failed := False;
-  Editable := False;
-  try
-    if Member.IsObject then
-    begin
-      Obj := Member.GetObject;
-      Value := ObjectSummary(Obj);
-    end
-    else
-      Value := Member.ValueText;
-    Editable := Member.IsEditable;
-  except
-    Value := '<error: ' + ExceptionMessage + '>';
-    Failed := True;
-  end;
-  Result := PropJson(Member.Name, Path, Member.Info, Value, Member.Scope, Editable, Types);
-  if Failed or (Depth >= MaxPropertyDepth) then
-    Exit;
-
-  Members := nil;
-  try
-    if (Obj <> nil) and ShowsMembers(Obj) and not Expanded.Contains(Obj) then
-    begin
-      Expanded.Add(Obj);
-      Members := ObjectMembers(Obj);
-    end
-    else if Member.IsRecord then
-      Members := Member.Fields;
-  except
-    AddStr(Result, 'error', ExceptionMessage);
-    Exit;
-  end;
-  if Members = nil then
-    Exit;
-  List := TJSONArray.Create;
-  Result.AddPair('properties', List);
-  for Child in Members do
-    List.AddElement(MemberJson(Child, JoinPath(Path, Child.Name), Depth + 1, Types, Expanded));
-end;
-
-// Published properties, the TControl/TWinControl properties the class
-// doesn't publish, and public record properties, sorted by name, each with
-// the members of the object or record it returns. "types" lists the names
-// that editable enumeration, set, color and cursor types accept.
-procedure AddProperties(Target: TJSONObject; Ctrl: TControl);
-var
-  Count, I: Integer;
-  List: PPropList;
-  Prop: PPropInfo;
-  Props, Events: TJSONArray;
-  Types: TJSONObject;
-  Member: TMember;
-  Method: TMethod;
-  Expanded: TList<TObject>;
-begin
-  Props := TJSONArray.Create;
-  Target.AddPair('properties', Props);
-  Events := TJSONArray.Create;
-  Target.AddPair('events', Events);
-  Types := TJSONObject.Create;
-  Target.AddPair('types', Types);
-
-  Count := GetPropList(PTypeInfo(Ctrl.ClassInfo), List);
-  if Count > 0 then
-  try
-    for I := 0 to Count - 1 do
-    begin
-      Prop := List^[I];
-      if (Prop^.GetProc <> nil) and (Prop^.PropType^.Kind = tkMethod) then
-      begin
-        Method := GetMethodProp(Ctrl, Prop);
-        if Method.Code <> nil then
-          Events.AddElement(HandlerJson(GetPropName(Prop), Method));
-      end;
-    end;
-  finally
-    FreeMem(List);
-  end;
-
-  Expanded := TList<TObject>.Create;
-  try
-    Expanded.Add(Ctrl);
-    for Member in ControlMembers(Ctrl) do
-      Props.AddElement(MemberJson(Member, Member.Name, 0, Types, Expanded));
-  finally
-    Expanded.Free;
-  end;
-end;
-
-function ClassHierarchyJson(Cls: TClass): TJSONArray;
-var
-  Item: TJSONObject;
-begin
-  Result := TJSONArray.Create;
-  while Cls <> nil do
-  begin
-    Item := TJSONObject.Create;
-    AddStr(Item, 'className', Cls.ClassName);
-    AddStr(Item, 'unitName', Cls.UnitName);
-    AddStr(Item, 'module', ClassModuleName(Cls));
-    Result.AddElement(Item);
-    Cls := Cls.ClassParent;
-  end;
-end;
-
-function OwnersJson(C: TComponent): TJSONArray;
-var
-  Item: TJSONObject;
-begin
-  Result := TJSONArray.Create;
-  C := C.Owner;
-  while C <> nil do
-  begin
-    Item := TJSONObject.Create;
-    AddStr(Item, 'name', C.Name);
-    AddStr(Item, 'className', C.ClassName);
-    AddStr(Item, 'unitName', C.UnitName);
-    AddStr(Item, 'kind', ComponentKind(C));
-    Result.AddElement(Item);
-    C := C.Owner;
-  end;
-end;
-
-function AddressText(C: TControl): string;
-begin
-  Result := Format('$%p', [Pointer(C)]);
 end;
 
 function ChildCount(C: TControl): Integer;
@@ -518,25 +249,6 @@ begin
     Result.AddElement(Item);
     C := C.Parent;
   end;
-end;
-
-function ComponentJson(C: TComponent): TJSONObject;
-begin
-  Result := TJSONObject.Create;
-  AddStr(Result, 'name', C.Name);
-  AddStr(Result, 'className', C.ClassName);
-  AddStr(Result, 'unitName', C.UnitName);
-  AddStr(Result, 'path', ComponentPath(C));
-end;
-
-function ActionJson(Action: TBasicAction): TJSONObject;
-var
-  OnExecute: TNotifyEvent;
-begin
-  Result := ComponentJson(Action);
-  OnExecute := Action.OnExecute;
-  if Assigned(OnExecute) then
-    Result.AddPair('onExecute', HandlerJson('OnExecute', TMethod(OnExecute)));
 end;
 
 function PhysicalScreenRect(Ctrl: TControl; const Mapping: TDpiMapping): TRect;
@@ -608,34 +320,6 @@ begin
   AddProperties(Result, Ctrl);
 end;
 
-function WindowJson(Wnd: HWND): TJSONObject;
-var
-  Buffer: array[0..255] of Char;
-  ClassName: string;
-begin
-  Result := TJSONObject.Create;
-  AddInt(Result, 'hwnd', Wnd);
-  SetString(ClassName, Buffer, GetClassName(Wnd, Buffer, Length(Buffer)));
-  AddStr(Result, 'className', ClassName);
-  AddStr(Result, 'style', Format('$%.8x', [GetWindowLong(Wnd, GWL_STYLE)]));
-  AddStr(Result, 'exStyle', Format('$%.8x', [GetWindowLong(Wnd, GWL_EXSTYLE)]));
-end;
-
-function InspectorText: string;
-const
-  Platform = {$IFDEF WIN64}'Win64'{$ELSE}'Win32'{$ENDIF};
-begin
-  if LinkedInspectorName <> '' then
-    Result := Format('%s in %s (Delphi %.1f, %s)', [LinkedInspectorName,
-      ExtractFileName(ModulePath(HInstance)), CompilerVersion, Platform])
-  else if OwnVcl then
-    Result := Format('%s (Delphi %.1f, %s, no packages, memory manager: %s)',
-      [ExtractFileName(ModulePath(HInstance)), CompilerVersion, Platform, MemoryManagerText])
-  else
-    Result := Format('%s (Delphi %.1f, %s)', [ExtractFileName(ModulePath(HInstance)),
-      CompilerVersion, Platform]);
-end;
-
 // Ctrl may be nil (the forms reply)
 function ProcessJson(Ctrl: TControl): TJSONObject;
 begin
@@ -644,7 +328,8 @@ begin
   AddStr(Result, 'exe', ParamStr(0));
   if LinkedInspectorName <> '' then
     AddStr(Result, 'computer', GetEnvironmentVariable('COMPUTERNAME'));
-  if OwnVcl then
+  AddStr(Result, 'framework', 'VCL');
+  if OwnRtl then
   begin
     // The module that links the target's VCL: the exe, or a DLL with its own VCL
     if Ctrl <> nil then
@@ -693,7 +378,7 @@ begin
   // belong to the nearest VCL parent
   Found := WindowControl(Wnd);
   if Found = nil then
-    if OwnVcl then
+    if OwnRtl then
       Exit(ErrorReport(Format('Window $%x is not a VCL control.', [NativeUInt(Wnd)])))
     else
       Exit(ErrorReport(Format('Window $%x is not a VCL control of the shared VCL (%s). It may be a ' +
@@ -809,74 +494,25 @@ begin
   end;
 end;
 
-// The deepest window at a physical screen point, disabled ones included
-// (WindowFromPoint skips those), as VclSpy's finder resolves it. With
-// AtCursor, the window at the mouse cursor, whose position Pt returns.
-function WindowAtPhysicalPoint(var Pt: TPoint; AtCursor: Boolean): HWND;
-var
-  SetContext: TSetThreadDpiAwarenessContext;
-  Old: THandle;
-  Child: HWND;
-  ClientPt: TPoint;
-begin
-  // Physical coordinates, also in a DPI-unaware target
-  @SetContext := GetProcAddress(GetModuleHandle(user32), 'SetThreadDpiAwarenessContext');
-  Old := 0;
-  if Assigned(SetContext) then
-    Old := SetContext(DpiAwarenessPerMonitorV2);
-  try
-    if AtCursor then
-      GetCursorPos(Pt);
-    Result := WindowFromPoint(Pt);
-    if Result = 0 then
-      Exit;
-    Result := GetAncestor(Result, GA_ROOT);
-    repeat
-      ClientPt := Pt;
-      ScreenToClient(Result, ClientPt);
-      Child := ChildWindowFromPointEx(Result, ClientPt, CWP_SKIPINVISIBLE or CWP_SKIPTRANSPARENT);
-      if (Child = 0) or (Child = Result) then
-        Break;
-      Result := Child;
-    until False;
-  finally
-    if Old <> 0 then
-      SetContext(Old);
-  end;
-end;
-
 // Reports the control at the mouse cursor, or at "x" and "y"
 function PickReply(Request: TJSONObject): string;
 var
   Pt: TPoint;
-  AtCursor: Boolean;
   Wnd: HWND;
-  Pid: DWORD;
-  Where: string;
 begin
-  AtCursor := not (Request.TryGetValue<Integer>('x', Pt.X) and Request.TryGetValue<Integer>('y', Pt.Y));
-  Wnd := WindowAtPhysicalPoint(Pt, AtCursor);
-  if AtCursor then
-    Where := Format('the mouse cursor (%d, %d)', [Pt.X, Pt.Y])
-  else
-    Where := Format('%d, %d', [Pt.X, Pt.Y]);
-  if Wnd = 0 then
-    Exit(ErrorReport('There is no window at ' + Where + '.'));
-  GetWindowThreadProcessId(Wnd, Pid);
-  if Pid <> GetCurrentProcessId then
-    Exit(ErrorReport(Format('The window at %s is not one of %s.', [Where, ExtractFileName(ParamStr(0))])));
-  Result := BuildReport(Wnd, Pt);
+  Wnd := PickWindow(Request, Pt, Result);
+  if Wnd <> 0 then
+    Result := BuildReport(Wnd, Pt);
 end;
 
 function HandleRequest(Wnd: HWND; const RequestJson: string): string;
 var
   Value: TJSONValue;
   Request, Report, Changed: TJSONObject;
-  Op, Name, Text, OldText: string;
+  Op: string;
   Address: UInt64;
   Root: TWinControl;
   Ctrl: TControl;
-  Member: TMember;
 begin
   Root := WindowControl(Wnd);
   if (Root <> nil) and not CheckTarget(Root, Result) then
@@ -918,22 +554,9 @@ begin
 
     if SameText(Op, 'set') then
     begin
-      Name := Request.GetValue<string>('property', '');
-      if not Request.TryGetValue<string>('value', Text) then
-        Exit(ErrorReport('The request needs "value".'));
-      try
-        Member := FindMember(Ctrl, Name);
-        OldText := MemberText(Member);
-        Member.SetValueText(Text);
-      except
-        // Also exceptions of the target's setter, which aren't the inspector's Exception
-        Exit(ErrorReport(Format('Cannot set %s: %s', [Name, ExceptionMessage])));
-      end;
-      Changed := TJSONObject.Create;
-      AddStr(Changed, 'property', Name);
-      AddStr(Changed, 'oldValue', Shorten(OldText));
-      // Again: a record field's member holds the record as it was
-      AddStr(Changed, 'newValue', Shorten(MemberText(FindMember(Ctrl, Name))));
+      Result := SetMember(Ctrl, Request, Changed);
+      if Result <> '' then
+        Exit;
     end;
 
     Report := NewReport(Ctrl, ControlWindow(Ctrl, Wnd));
@@ -953,20 +576,6 @@ begin
   end;
 end;
 
-procedure SendReply(ReplyWnd: HWND; const Json: string);
-var
-  Bytes: TBytes;
-  Data: TCopyDataStruct;
-  Res: DWORD_PTR;
-begin
-  Bytes := TEncoding.UTF8.GetBytes(Json);
-  Data.dwData := VclSpyCopyDataMagic;
-  Data.cbData := Length(Bytes);
-  Data.lpData := Pointer(Bytes);
-  SendMessageTimeout(ReplyWnd, WM_COPYDATA, 0, LPARAM(@Data), SMTO_ABORTIFHUNG,
-    VclSpyReplyTimeout, @Res);
-end;
-
 procedure VclSpyInspect(Wnd: HWND; X, Y: Integer; ReplyWnd: HWND); stdcall;
 var
   Json: string;
@@ -980,14 +589,9 @@ begin
 end;
 
 function RequestReply(Wnd: HWND; const Request: string): string;
-var
-  Text: string;
 begin
   try
-    Text := Request;
-    if (Text <> '') and (Text[1] = #$FEFF) then
-      Delete(Text, 1, 1); // BOM of a request file
-    Result := HandleRequest(Wnd, Text);
+    Result := HandleRequest(Wnd, RequestText(Request));
   except
     Result := ErrorReport(ExceptionText);
   end;

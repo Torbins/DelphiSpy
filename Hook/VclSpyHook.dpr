@@ -5,7 +5,8 @@ library VclSpyHook;
   process. On a VclSpy query or request it loads the inspector DLL that
   matches the target's VCL package version and calls it on the target's GUI
   thread. A target without a VCL package gets a no-packages inspector, the
-  one built with the target's Delphi version. }
+  one built with the target's Delphi version. FireMonkey forms get the FMX
+  inspectors instead, picked the same way by the fmxNNN.bpl loaded. }
 
 uses
   Winapi.Windows,
@@ -112,6 +113,22 @@ begin
   Result := False;
 end;
 
+// True if Wnd or a parent window is a FireMonkey form: FMX gives the window
+// of each form the property 'FIREMONKEY' + process id
+function IsFmxWindow(Wnd: HWND): Boolean;
+var
+  Name: string;
+begin
+  Name := 'FIREMONKEY' + HexStr(GetCurrentProcessId);
+  while Wnd <> 0 do
+  begin
+    if GetProp(Wnd, PChar(Name)) <> 0 then
+      Exit(True);
+    Wnd := GetParent(Wnd);
+  end;
+  Result := False;
+end;
+
 // Calls Initialize or Finalize of a no-packages inspector, a package
 procedure CallPackageProc(Lib: HMODULE; const Name: string);
 var
@@ -122,11 +139,12 @@ begin
     Proc;
 end;
 
-// For a target without VCL package: loads the no-packages inspector of the
+// For a target without the framework's package: loads the no-packages
+// inspector (Prefix: VclSpyInspectNoPkg or VclSpyInspectFmxNoPkg) of the
 // target's Delphi version. That is the one an earlier pick loaded, or else
 // the first, newest version first, whose probe accepts the control of Wnd.
 // Returns 0 after sending an error.
-function LoadNoPkgInspector(Wnd, ReplyWnd: HWND): HMODULE;
+function LoadNoPkgInspector(Wnd, ReplyWnd: HWND; const Prefix, Framework: string): HMODULE;
 var
   I: Integer;
   Name, Path, Tried: string;
@@ -134,16 +152,9 @@ var
   Active: TVclSpyActiveProc;
   Err: DWORD;
 begin
-  if not IsVclWindow(Wnd) then
-  begin
-    SendError(ReplyWnd, 'The window is not a VCL control: the target loads no vclNNN.bpl, ' +
-      'and the window has no property of a statically linked VCL.');
-    Exit(0);
-  end;
-
   for I := Low(VclSpyPackageSuffixes) to High(VclSpyPackageSuffixes) do
   begin
-    Result := GetModuleHandle(PChar(VclSpyNoPkgDllPrefix + VclSpyPackageSuffixes[I] + '.dll'));
+    Result := GetModuleHandle(PChar(Prefix + VclSpyPackageSuffixes[I] + '.dll'));
     if Result <> 0 then
     begin
       @Active := GetProcAddress(Result, PChar(VclSpyActiveExport));
@@ -158,7 +169,7 @@ begin
   Tried := '';
   for I := Low(VclSpyPackageSuffixes) to High(VclSpyPackageSuffixes) do
   begin
-    Name := VclSpyNoPkgDllPrefix + VclSpyPackageSuffixes[I] + '.dll';
+    Name := Prefix + VclSpyPackageSuffixes[I] + '.dll';
     Path := ModuleDir + Name;
     if GetFileAttributes(PChar(Path)) = INVALID_FILE_ATTRIBUTES then
       Continue;
@@ -183,38 +194,58 @@ begin
 
   if Tried = '' then
     SendError(ReplyWnd, 'The target is not built with Delphi runtime packages, and there is no ' +
-      VclSpyNoPkgDllPrefix + 'NNN.dll in ' + ModuleDir + '.')
+      Prefix + 'NNN.dll in ' + ModuleDir + '.')
   else
     SendError(ReplyWnd, 'The target is not built with Delphi runtime packages, and no no-packages ' +
-      'inspector matches its VCL (tried ' + Copy(Tried, 3, MaxInt) + '). It may be built with a ' +
-      'Delphi version VclSpy does not support.');
+      'inspector matches its ' + Framework + ' (tried ' + Copy(Tried, 3, MaxInt) + '). It may be built ' +
+      'with a Delphi version VclSpy does not support.');
   Result := 0;
 end;
 
-// Loads the inspector DLL that matches the target's VCL package version, or
-// a no-packages inspector, and returns the address of one of its exports, or
-// nil after sending an error.
+// Loads the inspector DLL that matches the target's VCL or FMX package
+// version, or a no-packages inspector, and returns the address of one of its
+// exports, or nil after sending an error.
 function InspectorProc(Wnd, ReplyWnd: HWND; const ExportName: string): Pointer;
 var
-  Suffix, Path: string;
+  Package, Prefix, NoPkgPrefix, Framework, Suffix, Path: string;
   Lib: HMODULE;
   Err: DWORD;
 begin
   Result := nil;
-  Suffix := FindLoadedPackage('vcl');
+  if IsFmxWindow(Wnd) then
+  begin
+    Package := 'fmx';
+    Prefix := VclSpyFmxInspectDllPrefix;
+    NoPkgPrefix := VclSpyFmxNoPkgDllPrefix;
+    Framework := 'FireMonkey';
+  end
+  else
+  begin
+    Package := 'vcl';
+    Prefix := VclSpyInspectDllPrefix;
+    NoPkgPrefix := VclSpyNoPkgDllPrefix;
+    Framework := 'VCL';
+  end;
+  Suffix := FindLoadedPackage(Package);
   if Suffix = '' then
   begin
-    Lib := LoadNoPkgInspector(Wnd, ReplyWnd);
+    if (Package = 'vcl') and not IsVclWindow(Wnd) then
+    begin
+      SendError(ReplyWnd, 'The window is not a VCL control nor a FireMonkey form: the target loads no ' +
+        'vclNNN.bpl, and the window has no property of a statically linked VCL or FireMonkey.');
+      Exit;
+    end;
+    Lib := LoadNoPkgInspector(Wnd, ReplyWnd, NoPkgPrefix, Framework);
     if Lib = 0 then
       Exit;
     Path := ModulePath(Lib);
   end
   else
   begin
-    Path := ModuleDir + VclSpyInspectDllPrefix + Suffix + '.dll';
+    Path := ModuleDir + Prefix + Suffix + '.dll';
     if GetFileAttributes(PChar(Path)) = INVALID_FILE_ATTRIBUTES then
     begin
-      SendError(ReplyWnd, 'The target uses vcl' + Suffix + '.bpl, but ' + Path + ' does not exist.');
+      SendError(ReplyWnd, 'The target uses ' + Package + Suffix + '.bpl, but ' + Path + ' does not exist.');
       Exit;
     end;
 

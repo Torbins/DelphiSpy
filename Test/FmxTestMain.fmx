@@ -1,0 +1,83 @@
+object frmFmxTest: TfrmFmxTest
+  Left = 200
+  Top = 200
+  Caption = 'VclSpy FMX Test'
+  ClientHeight = 320
+  ClientWidth = 460
+  Position = Designed
+  OnCreate = FormCreate
+  object btnOk: TButton
+    Position.X = 16.000000000000000000
+    Position.Y = 16.000000000000000000
+    Size.Width = 100.000000000000000000
+    Size.Height = 28.000000000000000000
+    Size.PlatformDefault = False
+    TabOrder = 0
+    Text = 'OK'
+    OnClick = btnOkClick
+  end
+  object lblInfo: TLabel
+    Position.X = 132.000000000000000000
+    Position.Y = 16.000000000000000000
+    Size.Width = 150.000000000000000000
+    Size.Height = 28.000000000000000000
+    Size.PlatformDefault = False
+    Text = 'Info label'
+  end
+  object edtDisabled: TEdit
+    Position.X = 16.000000000000000000
+    Position.Y = 56.000000000000000000
+    Size.Width = 150.000000000000000000
+    Size.Height = 28.000000000000000000
+    Size.PlatformDefault = False
+    Enabled = False
+    TabOrder = 1
+    Text = 'Disabled edit'
+  end
+  object btnAction: TButton
+    Position.X = 182.000000000000000000
+    Position.Y = 56.000000000000000000
+    Size.Width = 100.000000000000000000
+    Size.Height = 28.000000000000000000
+    Size.PlatformDefault = False
+    Action = actSave
+    TabOrder = 2
+  end
+  object lytHost: TLayout
+    Position.X = 16.000000000000000000
+    Position.Y = 96.000000000000000000
+    Size.Width = 280.000000000000000000
+    Size.Height = 100.000000000000000000
+    Size.PlatformDefault = False
+  end
+  object cmbChoice: TComboBox
+    Position.X = 16.000000000000000000
+    Position.Y = 210.000000000000000000
+    Size.Width = 150.000000000000000000
+    Size.Height = 28.000000000000000000
+    Size.PlatformDefault = False
+    TabOrder = 3
+  end
+  object rctColor: TRectangle
+    Position.X = 310.000000000000000000
+    Position.Y = 16.000000000000000000
+    Size.Width = 130.000000000000000000
+    Size.Height = 40.000000000000000000
+    Size.PlatformDefault = False
+    Fill.Color = claYellow
+  end
+  object lstItems: TListBox
+    Position.X = 310.000000000000000000
+    Position.Y = 70.000000000000000000
+    Size.Width = 130.000000000000000000
+    Size.Height = 120.000000000000000000
+    Size.PlatformDefault = False
+    TabOrder = 4
+  end
+  object alMain: TActionList
+    object actSave: TAction
+      Text = 'Save'
+      OnExecute = actSaveExecute
+    end
+  end
+end

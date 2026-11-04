@@ -18,17 +18,21 @@ unit VclSpy.Members;
 
   Objects show their published and public properties, the control its
   published properties and public record properties (records can't be
-  published). Published properties come from RTTI, public ones from extended
-  RTTI (System.Rtti), which the RTL and VCL have for public properties and
+  published), or all its public properties with AllPublicOfControl.
+  Published properties come from RTTI, public ones from extended RTTI
+  (System.Rtti), which the RTL, VCL and FMX have for public properties and
   for record fields. Public getters that change the object
-  (TPicture.Bitmap) are skipped. Running in a no-packages inspector,
-  System.Rtti reads the target's type information, which has the
-  inspector's layout (VclSpy.Target). }
+  (TPicture.Bitmap) are skipped (RegisterSkippedProperty). Running in a
+  no-packages inspector, System.Rtti reads the target's type information,
+  which has the inspector's layout (VclSpy.Target).
+
+  This unit knows no framework: the framework's units register what is
+  special about its classes (lists of items, getters to skip, summaries). }
 
 interface
 
 uses
-  System.SysUtils, System.TypInfo, System.Rtti, Vcl.Controls, VclSpy.Properties;
+  System.SysUtils, System.Classes, System.TypInfo, System.Rtti, VclSpy.Properties;
 
 type
   TMemberKind = (mkPublished, mkExtra, mkPublic, mkField, mkItem);
@@ -67,9 +71,10 @@ type
     function Fields: TArray<TMember>;
   end;
 
-// The control's published properties, the ExtraProps its class doesn't
-// publish and its public record properties, sorted by name
-function ControlMembers(Ctrl: TControl): TArray<TMember>;
+// The control's published properties, the extra properties its class doesn't
+// publish and its public record properties (all public ones with
+// AllPublicOfControl), sorted by name
+function ControlMembers(Ctrl: TObject): TArray<TMember>;
 // The published and public properties of Obj, sorted by name, then the
 // items of a collection, of a list view or of a tree view
 function ObjectMembers(Obj: TObject): TArray<TMember>;
@@ -77,14 +82,54 @@ function ObjectMembers(Obj: TObject): TArray<TMember>;
 // not those of other components
 function ShowsMembers(Obj: TObject): Boolean;
 // The member that Path names; raises EConvertError if there is none
-function FindMember(Ctrl: TControl; const Path: string): TMember;
+function FindMember(Ctrl: TObject; const Path: string): TMember;
 function JoinPath(const Path, Name: string): string;
+
+// A short text for an object: "(TFont) Segoe UI, 9 pt", a component's path...
+function ObjectSummary(Obj: TObject): string;
+// Shortens long values for reports
+function Shorten(const S: string): string;
+// Owner chain as written in code: Form.Frame.Component
+function ComponentPath(C: TComponent): string;
+
+// Lists of items besides TCollection (TListItems): the instances of the
+// class named ClassName list Count items, Item(List, Index) for 0..Count - 1
+procedure RegisterItemList(const ClassName: string; const Count: TFunc<TObject, Integer>;
+  const Item: TFunc<TObject, Integer, TObject>);
+// A public property of the class named ClassName whose getter changes the
+// object, or that isn't worth showing; '*' for every class
+procedure RegisterSkippedProperty(const ClassName, PropName: string);
+// ObjectSummary of the instances of the class named ClassName
+procedure RegisterSummary(const ClassName: string; const Summary: TFunc<TObject, string>);
+
+const
+  MaxValueLength = 300;
+
+var
+  // The control shows all its public properties, not only record ones: for
+  // frameworks without extra properties (FMX)
+  AllPublicOfControl: Boolean;
 
 implementation
 
 uses
-  System.Classes, System.Variants, System.Generics.Collections, System.Generics.Defaults, Vcl.Graphics,
-  Vcl.ComCtrls, VclSpy.Target;
+  System.Variants, System.Generics.Collections, System.Generics.Defaults, VclSpy.Target;
+
+type
+  TItemList = record
+    ClassName: string;
+    Count: TFunc<TObject, Integer>;
+    Item: TFunc<TObject, Integer, TObject>;
+  end;
+
+  TSkippedProperty = record
+    ClassName, PropName: string;
+  end;
+
+  TSummary = record
+    ClassName: string;
+    Summary: TFunc<TObject, string>;
+  end;
 
 const
   // Items of a collection, list view or tree view that are shown
@@ -93,6 +138,89 @@ const
 var
   // Keeps the RTTI objects that members refer to
   Context: TRttiContext;
+  ItemLists: TArray<TItemList>;
+  SkippedProperties: TArray<TSkippedProperty>;
+  Summaries: TArray<TSummary>;
+
+procedure RegisterItemList(const ClassName: string; const Count: TFunc<TObject, Integer>;
+  const Item: TFunc<TObject, Integer, TObject>);
+var
+  List: TItemList;
+begin
+  List.ClassName := ClassName;
+  List.Count := Count;
+  List.Item := Item;
+  ItemLists := ItemLists + [List];
+end;
+
+procedure RegisterSkippedProperty(const ClassName, PropName: string);
+var
+  Skipped: TSkippedProperty;
+begin
+  Skipped.ClassName := ClassName;
+  Skipped.PropName := PropName;
+  SkippedProperties := SkippedProperties + [Skipped];
+end;
+
+procedure RegisterSummary(const ClassName: string; const Summary: TFunc<TObject, string>);
+var
+  Entry: TSummary;
+begin
+  Entry.ClassName := ClassName;
+  Entry.Summary := Summary;
+  Summaries := Summaries + [Entry];
+end;
+
+{ Summaries }
+
+function Shorten(const S: string): string;
+begin
+  if Length(S) > MaxValueLength then
+    Result := Copy(S, 1, MaxValueLength) + '...'
+  else
+    Result := S;
+end;
+
+function DisplayName(C: TComponent): string;
+begin
+  if C.Name <> '' then
+    Result := C.Name
+  else
+    Result := '<' + C.ClassName + '>';
+end;
+
+function ComponentPath(C: TComponent): string;
+begin
+  Result := DisplayName(C);
+  C := C.Owner;
+  while (C <> nil) and not IsKindOfName(C, 'TApplication') do
+  begin
+    Result := DisplayName(C) + '.' + Result;
+    C := C.Owner;
+  end;
+end;
+
+function ObjectSummary(Obj: TObject): string;
+var
+  Entry: TSummary;
+begin
+  if Obj = nil then
+    Exit('(nil)');
+  for Entry in Summaries do
+    if IsKindOfName(Obj, Entry.ClassName) then
+      Exit(Entry.Summary(Obj));
+  if IsKindOf(Obj, TComponent) then
+    Result := ComponentPath(TComponent(Obj)) + ': ' + Obj.ClassName
+  else if IsKindOf(Obj, TCollection) then
+    Result := Format('(%s, Count = %d)', [Obj.ClassName, TCollection(Obj).Count])
+  else if IsKindOf(Obj, TStrings) then
+    Result := Format('(%s, Count = %d) %s', [Obj.ClassName, TStrings(Obj).Count,
+      Shorten(TStrings(Obj).CommaText)])
+  else if IsKindOf(Obj, TCollectionItem) then
+    Result := Format('(%s) %s', [Obj.ClassName, Shorten(TCollectionItem(Obj).DisplayName)])
+  else
+    Result := '(' + Obj.ClassName + ')';
+end;
 
 { Values in memory: record fields }
 
@@ -150,6 +278,12 @@ end;
 
 function MemoryText(Info: PTypeInfo; P: Pointer): string; forward;
 
+// Not the static arrays of variant parts (TPointF.V)
+function IsShownField(Field: TRttiField): Boolean;
+begin
+  Result := (Field.FieldType <> nil) and (Field.FieldType.TypeKind <> tkArray);
+end;
+
 // "(Left = 0, Top = 0, ...)"
 function RecordText(Info: PTypeInfo; P: Pointer): string;
 var
@@ -160,7 +294,7 @@ begin
   RecType := Context.GetType(Info);
   if RecType <> nil then
     for Field in RecType.GetFields do
-      if Field.FieldType <> nil then
+      if IsShownField(Field) then
       begin
         if Result <> '' then
           Result := Result + ', ';
@@ -310,38 +444,61 @@ end;
 
 { Item lists: collections, and the items of list views and tree views }
 
-function IsItemList(Obj: TObject): Boolean;
+// The registered list Obj is, or nil
+function FindItemList(Obj: TObject; out List: TItemList): Boolean;
+var
+  Entry: TItemList;
 begin
-  Result := IsKindOf(Obj, TCollection) or IsKindOf(Obj, TListItems) or IsKindOf(Obj, TTreeNodes);
+  for Entry in ItemLists do
+    if IsKindOfName(Obj, Entry.ClassName) then
+    begin
+      List := Entry;
+      Exit(True);
+    end;
+  Result := False;
+end;
+
+function IsItemList(Obj: TObject): Boolean;
+var
+  List: TItemList;
+begin
+  Result := IsKindOf(Obj, TCollection) or FindItemList(Obj, List);
 end;
 
 function ItemCount(List: TObject): Integer;
+var
+  Entry: TItemList;
 begin
   if IsKindOf(List, TCollection) then
     Result := TCollection(List).Count
-  else if IsKindOf(List, TListItems) then
-    Result := TListItems(List).Count
+  else if FindItemList(List, Entry) then
+    Result := Entry.Count(List)
   else
-    Result := TTreeNodes(List).Count;
+    Result := 0;
 end;
 
-// Tree nodes by their absolute index: parents before their children
 function ItemAt(List: TObject; Index: Integer): TObject;
+var
+  Entry: TItemList;
 begin
   if IsKindOf(List, TCollection) then
     Result := TCollection(List).Items[Index]
-  else if IsKindOf(List, TListItems) then
-    Result := TListItems(List).Item[Index]
+  else if FindItemList(List, Entry) then
+    Result := Entry.Item(List, Index)
   else
-    Result := TTreeNodes(List).Item[Index];
+    Result := nil;
 end;
 
 // Public properties whose getters change the object: reading TPicture.Bitmap
 // turns a picture of another kind (the PNG of a TImage) into a bitmap
 function IsSkipped(Obj: TObject; const Name: string): Boolean;
+var
+  Skipped: TSkippedProperty;
 begin
-  Result := IsKindOf(Obj, TPicture) and (SameText(Name, 'Bitmap') or SameText(Name, 'Icon') or
-    SameText(Name, 'Metafile') or SameText(Name, 'WICImage'));
+  for Skipped in SkippedProperties do
+    if SameText(Name, Skipped.PropName) and ((Skipped.ClassName = '*') or IsKindOfName(Obj, Skipped.ClassName)) then
+      Exit(True);
+  Result := False;
 end;
 
 { TMember }
@@ -376,7 +533,7 @@ begin
     mkPublished:
       Result := PublishedText(Instance, Prop);
     mkExtra:
-      Result := Extra.ValueText(TControl(Instance));
+      Result := Extra.ValueText(Instance);
     mkPublic:
       begin
         Value := RttiProp.GetValue(Instance);
@@ -415,7 +572,7 @@ begin
     mkPublished:
       SetPublishedText(Instance, Prop, Text);
     mkExtra:
-      Extra.SetValueText(TControl(Instance), Text);
+      Extra.SetValueText(Instance, Text);
     mkPublic:
       begin
         if not IsEditableType(Info) then
@@ -482,7 +639,7 @@ begin
   if RecType = nil then
     Exit;
   for Field in RecType.GetFields do
-    if Field.FieldType <> nil then
+    if IsShownField(Field) then
     begin
       M := Default(TMember);
       M.Name := Field.Name;
@@ -541,8 +698,8 @@ begin
   end;
 end;
 
-// Public record properties; with AllKinds all public properties but events
-// and those IsSkipped
+// Public record properties, with AllKinds all public properties but events;
+// none that IsSkipped
 procedure AddPublic(var List: TArray<TMember>; Obj: TObject; AllKinds: Boolean);
 var
   ObjType: TRttiType;
@@ -558,9 +715,9 @@ begin
   // it may hide
   for Prop in ObjType.GetProperties do
     if (Prop.Visibility = mvPublic) and Prop.IsReadable and (Prop is TRttiInstanceProperty) and
-      (Prop.PropertyType <> nil) and (IndexOfName(List, Prop.Name) < 0) and
+      (Prop.PropertyType <> nil) and (IndexOfName(List, Prop.Name) < 0) and not IsSkipped(Obj, Prop.Name) and
       ((Prop.PropertyType.TypeKind in [tkRecord, tkMRecord]) or
-      (AllKinds and (Prop.PropertyType.TypeKind <> tkMethod) and not IsSkipped(Obj, Prop.Name))) then
+      (AllKinds and (Prop.PropertyType.TypeKind <> tkMethod))) then
     begin
       M := Default(TMember);
       M.Name := Prop.Name;
@@ -606,7 +763,7 @@ begin
   end;
 end;
 
-function ControlMembers(Ctrl: TControl): TArray<TMember>;
+function ControlMembers(Ctrl: TObject): TArray<TMember>;
 var
   Extra: TExtraProp;
   M: TMember;
@@ -624,7 +781,7 @@ begin
     M.Extra := Extra;
     Result := Result + [M];
   end;
-  AddPublic(Result, Ctrl, False);
+  AddPublic(Result, Ctrl, AllPublicOfControl);
   SortByName(Result);
 end;
 
@@ -675,7 +832,7 @@ begin
     end;
 end;
 
-function FindMember(Ctrl: TControl; const Path: string): TMember;
+function FindMember(Ctrl: TObject; const Path: string): TMember;
 var
   Names: TArray<string>;
   Members: TArray<TMember>;
@@ -718,6 +875,11 @@ end;
 
 initialization
   Context := TRttiContext.Create;
+  // ComObject raises for components that aren't COM objects; the Observers
+  // getter creates them
+  RegisterSkippedProperty('TComponent', 'ComObject');
+  RegisterSkippedProperty('TComponent', 'VCLComObject');
+  RegisterSkippedProperty('TComponent', 'Observers');
 finalization
   Context.Free;
 end.

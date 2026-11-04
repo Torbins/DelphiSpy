@@ -21,6 +21,10 @@ uses
   Winapi.Windows;
 
 function VclSpyActive: BOOL; stdcall;
+// Tells VclSpy.MemoryManager that it may use the memory manager that the exe
+// shares (SimpleShareMem): the inspector finalizes itself before the exe
+// frees it
+procedure VclSpyFinalizesEarly; stdcall;
 
 implementation
 
@@ -31,7 +35,8 @@ exports
   VclSpyInspect,
   VclSpyRequest,
   VclSpyProbe,
-  VclSpyActive;
+  VclSpyActive,
+  VclSpyFinalizesEarly;
 
 var
   Finalized: Boolean;
@@ -44,6 +49,10 @@ type
 function VclSpyActive: BOOL; stdcall;
 begin
   Result := not Finalized;
+end;
+
+procedure VclSpyFinalizesEarly; stdcall;
+begin
 end;
 
 function AppWndProc(Wnd: HWND; Msg: UINT; WParam: WPARAM; LParam: LPARAM): LRESULT; stdcall;

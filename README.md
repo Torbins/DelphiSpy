@@ -1,6 +1,6 @@
 # VclSpy
 
-Inspect, and change, controls of a running Delphi VCL application that is built **with runtime packages**, or, with some limits, without them (see [Targets without runtime packages](#targets-without-runtime-packages)).
+Inspect, and change, controls of a running Delphi VCL or FireMonkey (FMX) application that is built **with runtime packages**, or, with some limits, without them (see [Targets without runtime packages](#targets-without-runtime-packages) and [FireMonkey targets](#firemonkey-targets)).
 Drag the finder (crosshair) from VclSpy onto a control and release.
 VclSpy loads an inspector DLL into the target process. The DLL shares the target's `rtlNNN.bpl`/`vclNNN.bpl`, so it sees the target's real VCL objects.
 
@@ -12,16 +12,16 @@ Shown for the picked control:
 - Bound action and its `OnExecute` handler, class hierarchy, raw JSON, and a history of picks
 - **Parents**: the control tree of the form, unfolded down to the picked control, with all children of each parent on the way. Unfold any control to list its children (read from the target on demand). Select a control to inspect it instead.
 
-Graphic controls (`TLabel`, `TSpeedButton`, `TImage`...) and disabled controls are found too. Delphi 10.4 (270) and 11 (280) targets are supported, both 32- and 64-bit.
+Graphic controls (`TLabel`, `TSpeedButton`, `TImage`...) and disabled controls are found too. Delphi 10.4 (270) and 11 (280) targets are supported, both 32- and 64-bit. So are the forms of FireMonkey applications, their controls, and the objects of the controls' styles.
 
-Applications on other computers of the network can be inspected too, if they link the unit `VclSpy.Server` (see [Inspecting over the network](#inspecting-over-the-network)).
+Applications on other computers of the network can be inspected too, if they link the unit `VclSpy.Server` (`VclSpy.FmxServer` for FireMonkey; see [Inspecting over the network](#inspecting-over-the-network)).
 
 ## Editing properties
 
 Double-click a property (or select it and press Enter, or **Edit...**) to change it in the target. Gray properties are read-only. **Refresh** (F5) reads the control again.
 
 - **Editable**: published properties of simple types: integers, characters, floats and dates, strings, enumerations (including `Boolean`), and sets. Colors (`clRed`, `$00BBGGRR`), cursors (`crHandPoint`) and shortcuts (`Ctrl+S`) take names.
-- Also the properties `TControl` and `TWinControl` declare public or protected, so classes that don't publish them still get them (column *Scope*): `Visible`, `Enabled`, `Align`, `Anchors`, `BiDiMode`, `ClientWidth`, `ClientHeight`, `ShowHint`, `StyleElements`, `StyleName`, `Caption`, `Text`, `Color`, `ParentColor`, `ParentFont`, `ParentShowHint`, `ParentBiDiMode`, `AutoSize`, `DragMode`, `DragKind`, `DragCursor`; for windowed controls also `TabOrder`, `TabStop`, `DoubleBuffered`, `ParentDoubleBuffered`, `Bevel*`, `BorderWidth`, `Ctl3D`, `ParentCtl3D`, `ParentBackground`, `ImeMode`, `ImeName`, and read-only `Showing`. The list is `RegisterExtraProps` in `Inspector\VclSpy.Properties.pas`.
+- Also the properties `TControl` and `TWinControl` declare public or protected, so classes that don't publish them still get them (column *Scope*): `Visible`, `Enabled`, `Align`, `Anchors`, `BiDiMode`, `ClientWidth`, `ClientHeight`, `ShowHint`, `StyleElements`, `StyleName`, `Caption`, `Text`, `Color`, `ParentColor`, `ParentFont`, `ParentShowHint`, `ParentBiDiMode`, `AutoSize`, `DragMode`, `DragKind`, `DragCursor`; for windowed controls also `TabOrder`, `TabStop`, `DoubleBuffered`, `ParentDoubleBuffered`, `Bevel*`, `BorderWidth`, `Ctl3D`, `ParentCtl3D`, `ParentBackground`, `ImeMode`, `ImeName`, and read-only `Showing`. The list is `RegisterExtraProps` in `Inspector\VclSpy.VclProperties.pas`.
 - **Object and record properties** are read-only themselves, but unfold, like in the Object Inspector, to their members, which are read and edited like the control's properties. Click the plus box, double-click the property, or select it and press Enter or the Right arrow (Left folds it again, or goes to the property a member belongs to). Typing a filter lists the matching properties at any depth by their path (`Font.Size`).
   - Objects (`Font`, `Margins`, `Constraints`, `TLabeledEdit.EditLabel`...) unfold to their published and public properties (scope `public`, e.g. `Items.Count` and `Items.CommaText` of a combo box), and collections (`TStatusBar.Panels`, `TListView.Columns`) to their items, `[0]`, `[1]`... (the first 100). So do the `Items` of list views and tree views (tree nodes in tree order, parents before their children), whose items have public properties only (`Items[0].Caption`, `Items[0].SubItems`, `Items[1].Text`, `Items[1].Level`). Public properties whose getters change the object are left out: reading `TPicture.Bitmap`, `Icon`, `Metafile` or `WICImage` turns a picture of another kind (the PNG of a `TImage`) into one of that kind. Properties that refer to other components (`Action`, `PopupMenu`, `Images`) are not unfolded; inspect those components instead. Each object is unfolded once per report, up to 4 levels deep.
   - Records can't be published, so they come from the public properties of the class (`BoundsRect`, `ClientRect`, `ClientOrigin` of every control). They unfold to their fields, nested records too (`BoundsRect.TopLeft.X`). Editing a field reads the record from the property, changes the field, and passes the record to the property's setter. The fields of a record property without a setter (`ClientRect`) are read-only.
@@ -49,6 +49,10 @@ bin\x86\  bin\x64\
     VclSpyInspect280.dll             inspector for rtl280/vcl280 targets (Delphi 11)
     VclSpyInspectNoPkg270.dll        inspector for Delphi 10.4 targets without runtime packages
     VclSpyInspectNoPkg280.dll        inspector for Delphi 11 targets without runtime packages
+    VclSpyInspectFmx270.dll          inspector for FireMonkey targets with fmx270 (Delphi 10.4)
+    VclSpyInspectFmx280.dll          inspector for FireMonkey targets with fmx280 (Delphi 11)
+    VclSpyInspectFmxNoPkg270.dll     inspector for Delphi 10.4 FireMonkey targets without runtime packages
+    VclSpyInspectFmxNoPkg280.dll     inspector for Delphi 11 FireMonkey targets without runtime packages
 ```
 
 Deploy the whole `bin` folder; VclSpy picks `x86` or `x64` by the target's bitness.
@@ -57,7 +61,7 @@ Deploy the whole `bin` folder; VclSpy picks `x86` or `x64` by the target's bitne
 
 1. VclSpy resolves the deepest window under the cursor and checks the target's bitness and elevation. It then runs `bin\<arch>\VclSpyInject.exe --hwnd <h> --x <x> --y <y>`.
 2. The injector installs a `WH_CALLWNDPROC` hook with `VclSpyHook.dll` on the target window's thread and sends it a query message. That loads the stub into the target. The stub runs on the target's **GUI thread**, so touching VCL objects is safe there.
-3. The stub checks which `vclNNN.bpl` is loaded and loads the matching `VclSpyInspectNNN.dll` from its own folder. If none is loaded, it loads a no-packages inspector instead (see below).
+3. The stub checks which `vclNNN.bpl` is loaded and loads the matching `VclSpyInspectNNN.dll` from its own folder. If none is loaded, it loads a no-packages inspector instead (see below). For a FireMonkey form, it does the same with `fmxNNN.bpl` and the FMX inspectors (see [FireMonkey targets](#firemonkey-targets)).
 4. The inspector runs `FindControl(hwnd)` (walking to the parent window for non-VCL child windows), then `ControlAtPos` for graphic controls. It collects the data and sends JSON back with `WM_COPYDATA`. The injector prints it to stdout.
 
 The inspector DLL stays loaded in the target after the first pick, because unloading package-based DLLs from a live app is risky. Later picks reuse it.
@@ -77,6 +81,21 @@ A target that loads no `vclNNN.bpl` links the VCL statically, so it has its own 
 
 `process.vclModule` names the module that links the VCL the control belongs to (`process.vclPackage` with packages). Edits run some VCL code of the inspector's own VCL copy on the target's control (`TControl.SetText`, `SetAlign`...), so global VCL state (`Screen`, `Application`, styles) seen by that code is the inspector's, not the target's.
 
+## FireMonkey targets
+
+FireMonkey applications are inspected like VCL ones: with and without runtime packages, Delphi 10.4 and 11, 32- and 64-bit, through the CLI, and over the network (with `VclSpy.FmxServer`). The hook stub tells a FireMonkey form by the property that FMX gives the window of each form (`FIREMONKEY` + process ID). It loads `VclSpyInspectFmxNNN.dll` if the target loads `fmxNNN.bpl`, and otherwise a no-packages inspector, `VclSpyInspectFmxNoPkgNNN.dll`: the first, newest version first, that accepts the target. It accepts targets whose `TCommonCustomForm` has the size it has in its own Delphi version (the RTL classes have the same size in 10.4 and 11; FMX's don't).
+
+FMX controls have no windows, so some things work differently:
+
+- **Picking.** The inspector finds the form of the window under the finder (or of its parent window, for native controls), maps the point to the form's coordinates (the window's pixels divided by the form's scale), and takes the topmost visible control whose `AbsoluteRect` holds it, in paint order. A control's `ClipChildren` hides its children outside it. `HitTest` doesn't matter, so labels are found too. Not picked are the objects of a control's style (the style object that a `TStyledControl` applies, its first child, and everything below it) and the internal containers of controls (`TContent`, such as the content of list boxes and scroll boxes, and `TStyledPresentation`): the control they belong to is reported instead, or the control inside the container (a list box item).
+- **Parents** lists all child objects: controls, the objects of styles (marked `[style]`, and named by their `StyleName`, e.g. `'text': TText`, when they have no name), animations and effects. Select any of them to inspect it; the objects of a style can be edited too, until the control applies its style again.
+- `bounds` are `Position.X`, `Position.Y`, `Width` and `Height`, in dp; `screenRect` comes from `AbsoluteRect`. The report's `window` is the form's window, where requests go; `style` is `true` for the objects of a style.
+- **Properties.** The control's published properties and *all* its public ones (`AbsoluteRect`, `ParentedVisible`, `IsFocused`, `BoundsRect`...), since FMX has no protected properties worth reaching. Left out are `Canvas` (getters that may create one), `TFmxObject.Data` (a `TValue`), `TControl.Controls` (the same as `Children`), and `TComponent`'s `ComObject`, `VCLComObject` and `Observers`. Objects, collections and records unfold as for the VCL (`TextSettings.Font.Size`, `Margins.Left`, `Position.X`, `BoundsRect.Left`); an object that two properties return (a button's `Font` and `TextSettings.Font`) is unfolded once, below the first. Colors (`TAlphaColor`) take names (`Red`, `claRed`) or numbers (`#FF112233`, `#AARRGGBB`), cursors names (`crHandPoint`).
+
+The FMX inspectors link no FireMonkey unit: a second FireMonkey in the target would set up platform services, windows and OLE of its own. They reach the target's FMX objects through RTTI instead (`Children`, `Parent`, `AbsoluteRect`, the style field of `TStyledControl`), and tell their classes by name. So the package inspector shares only `rtlNNN.bpl` with the target. The no-packages inspector is a package that contains the RTL, like the VCL one, with the same handling of the memory manager, but for one thing: FireMonkey destroys no window when an exe ends (only in a DLL), so the inspector can't finalize itself before an exe that shares its memory manager (`SimpleShareMem`) frees all of it. It would touch that memory when it is unloaded, at the very end of the process. So with such a target it guards its own memory manager (`own, guarded`), with the limits that brings.
+
+Not available for FireMonkey targets: names of shortcuts (`TShortCut` values are numbers), 3D objects (the `TControl3D` objects of a `TViewport3D` or `TForm3D` are listed, but not picked), and platforms other than Windows.
+
 ## Inspecting over the network
 
 VclSpy can't drag its finder onto a window on another computer, nor inject anything there. Instead, the application links the unit `Server\VclSpy.Server.pas`, which runs an [App Tethering](https://docwiki.embarcadero.com/RADStudio/en/Using_App_Tethering) server inside it:
@@ -91,11 +110,13 @@ VclSpy can't drag its finder onto a window on another computer, nor inject anyth
      Vcl.Forms,
    ```
 
+   A FireMonkey application adds `VclSpy.FmxServer` instead, with the same folders and settings.
+
 2. Run the application. The server starts once the main message loop runs.
 3. In VclSpy, click **Connect...**. It lists the applications with `VclSpy.Server` on the local network (exe, process ID, computer, address). For a computer in another network, type its name or IP address (several, separated by `;`; an address ending in `.0` searches its /24 network) and click **Search**. Select one and **Connect**.
 4. **Forms...** lists the application's forms; pick one to inspect it, then browse its controls on the **Parents** tab. **F6** (or the first item of the Forms menu) inspects the control at the mouse cursor of the remote computer, for whoever sits there, or when you control it over remote desktop. Properties are read and edited as for local targets.
 
-The unit links VclSpy's inspector into the application, so nothing is injected: the inspector sees the application's own VCL. That works with and without runtime packages, with any memory manager, for 32- and 64-bit, and for any Delphi version the inspector compiles with (10.4 and 11 are tested). VclSpy and the application may be built with different Delphi versions.
+The unit links VclSpy's inspector into the application, so nothing is injected: the inspector sees the application's own VCL (or FireMonkey). That works with and without runtime packages, with any memory manager, for 32- and 64-bit, and for any Delphi version the inspector compiles with (10.4 and 11 are tested). VclSpy and the application may be built with different Delphi versions.
 
 Settings, made in the `.dpr` before `Application.Run`, or with environment variables of the application:
 
@@ -158,7 +179,7 @@ echo {"op":"set","address":"$02A41B20","property":"Panels[0].Text","value":"Read
 
 ## Tests
 
-`Test\run-tests.ps1` starts the test targets: 10.4/11 × x86/x64 with packages, and without packages (plain, with `ShareMem` and with `SimpleShareMem`). It inspects their controls through the CLI, edits some of their properties, checks the JSON, and checks that each target still closes normally. Targets that link `VclSpy.Server` (11 x86 without packages, 11 x64 with packages, 10.4 x64 without packages) are inspected the same way through `VclSpyRemote.exe`, over the loopback address, with a password:
+`Test\run-tests.ps1` starts the test targets: 10.4/11 × x86/x64 with packages, and without packages (plain, with `ShareMem` and with `SimpleShareMem`). It inspects their controls through the CLI, edits some of their properties, checks the JSON, and checks that each target still closes normally. Targets that link `VclSpy.Server` (11 x86 without packages, 11 x64 with packages, 10.4 x64 without packages) are inspected the same way through `VclSpyRemote.exe`, over the loopback address, with a password. So is the FireMonkey target, `Test\FmxTestTarget.dpr`, in the same variants (11 x86 and 10.4 x64 with packages, 11 x64 and 10.4 x86 without, 11 x86 with `ShareMem`, 11 x64 with `SimpleShareMem`, and with `VclSpy.FmxServer` 11 x86 without packages and 10.4 x64 with them). Its controls are found by name through `children`, and picked at the center of the `screenRect` that `get` reports. `-Only <pattern>` runs the variants whose folder in `Test\bin` matches (`-Only fmx-*`):
 
 ```bat
 powershell -ExecutionPolicy Bypass -File Test\run-tests.ps1
@@ -166,7 +187,7 @@ powershell -ExecutionPolicy Bypass -File Test\run-tests.ps1
 
 ## Limitations
 
-- The target must use the same major Delphi version's `vclNNN.bpl` as an inspector in `bin`, or, without packages, be built with the same Delphi version as a no-packages inspector. To support another version, add `Inspector\VclSpyInspectNNN.dpr` and `Inspector\VclSpyInspectNoPkgNNN.dpk` (copies with a different `CompilerVersion` or `VERnnn` check), build them with that Delphi, and add its suffix to `VclSpyPackageSuffixes` in `Common\VclSpy.Protocol.pas` if it is missing.
+- The target must use the same major Delphi version's `vclNNN.bpl` as an inspector in `bin`, or, without packages, be built with the same Delphi version as a no-packages inspector. To support another version, add `Inspector\VclSpyInspectNNN.dpr` and `Inspector\VclSpyInspectNoPkgNNN.dpk` (copies with a different `CompilerVersion` or `VERnnn` check), build them with that Delphi, and add its suffix to `VclSpyPackageSuffixes` in `Common\VclSpy.Protocol.pas` if it is missing. For FireMonkey, add `VclSpyInspectFmxNNN.dpr` and `VclSpyInspectFmxNoPkgNNN.dpk` the same way, and the size of that version's `TCommonCustomForm` (Win32 and Win64) to `FormInstanceSize` in `Inspector\VclSpy.FmxInspector.pas`.
 - In a target with runtime packages, controls of modules that link the VCL statically (a DLL with its own VCL) are not visible to the shared VCL; VclSpy reports this.
 - Without runtime packages, the inspector works on objects of a VCL copy that isn't its own. It is less robust than a package inspector, especially without `ShareMem`. Don't count on the target being in a good state after a debugging session.
 - Elevated targets need VclSpy to run as administrator.

@@ -1,51 +1,50 @@
 unit VclSpy.Target;
 
-{ Finds the target's VCL objects and tells their classes apart, for both kinds
-  of inspector DLL.
+{ Tells the target's objects apart, for every kind of inspector DLL.
 
-  The package inspectors (VclSpyInspectNNN.dll) share the target's rtl and vcl
-  packages: the target's objects are instances of the inspector's own classes,
-  so "is", FindControl and Screen work for them.
+  The package inspectors (VclSpyInspectNNN.dll for the VCL, and
+  VclSpyInspectFmxNNN.dll for FireMonkey) share the target's rtl package:
+  the target's objects are instances of the inspector's own RTL classes, so
+  "is" works for TComponent, TCollection, TStrings... The VCL inspectors share
+  the vcl package too.
 
-  The no-packages inspectors (VclSpyInspectNoPkgNNN.dll) link the VCL
-  statically, as the target does. Built by the same Delphi version, the
-  target's objects have the layout of the inspector's classes, so their
-  fields, RTTI, virtual methods and the VCL's static methods work, but their
-  classes are the target's own. So classes are compared by name, controls are
-  found through the window property that every VCL module in the process sets
-  ('Delphi' + process id), and forms by enumerating the process' windows.
-  CheckTarget makes sure that the target's VCL has this inspector's layout.
+  The no-packages inspectors (VclSpyInspectNoPkgNNN.dll and
+  VclSpyInspectFmxNoPkgNNN.dll) link the RTL (and the VCL) statically, as the
+  target does. Built by the same Delphi version, the target's objects have the
+  layout of the inspector's classes, so their fields, RTTI, virtual methods
+  and static methods work, but their classes are the target's own. So classes
+  are compared by name (IsKindOf).
+
+  The FMX inspectors don't link FireMonkey at all: they reach the target's FMX
+  objects through RTTI, and their classes by name (AncestorNamed).
 
   VclSpy.Server links the inspector into the target itself, which then works
-  like a package inspector: the VCL it sees is its own. }
+  like a package inspector: the RTL it sees is its own. }
 
 interface
 
 uses
-  Winapi.Windows, Vcl.Controls, Vcl.Forms;
+  Winapi.Windows;
 
-// True in the no-packages inspectors
-function OwnVcl: Boolean;
+// True in the no-packages inspectors: they have an RTL of their own
+function OwnRtl: Boolean;
 
 // Obj is Cls; in the no-packages inspectors also when it inherits from a
 // class of the same name
 function IsKindOf(Obj: TObject; Cls: TClass): Boolean;
-// The class among Obj's ancestors named like Cls (the target's TControl...)
+// The class among Obj's ancestors named like Cls (the target's TComponent...)
 function TargetClass(Obj: TObject; Cls: TClass): TClass;
+// The class among Obj's ancestors named Name, or nil: for classes of a
+// framework that the inspector doesn't link
+function AncestorNamed(Obj: TObject; const Name: string): TClass;
+function IsKindOfName(Obj: TObject; const Name: string): Boolean;
 
-// False, with a message, when the VCL of Ctrl doesn't have this inspector's
-// layout: the target was built with another Delphi version
-function CheckTarget(Ctrl: TControl; out Error: string): Boolean;
+// False, with a message, when the target's RTL doesn't have this inspector's
+// layout: Obj's TComponent has another size or other published properties
+function CheckRtl(Obj: TObject; out Error: string): Boolean;
 
-// The VCL control of Wnd, or nil. Check it with CheckTarget before use.
-function FindTargetControl(Wnd: HWND): TWinControl;
-// The VCL control of Wnd or of its nearest parent window that has one
-function WindowControl(Wnd: HWND): TWinControl;
-// The target's forms (in the no-packages inspectors, all parentless windowed
-// controls) that pass CheckTarget
-function TargetForms: TArray<TWinControl>;
-// GetParentForm(Ctrl, True)
-function TopParentForm(Ctrl: TControl): TCustomForm;
+// True if P points to a Delphi object: its class's vmtSelfPtr points back
+function LooksLikeObject(P: Pointer): Boolean;
 
 function ModuleOf(Address: Pointer): HMODULE;
 
@@ -62,19 +61,31 @@ function TargetMayKeepOurMemory: Boolean;
 implementation
 
 uses
-  System.SysUtils, System.Classes, System.TypInfo, System.Generics.Collections, VclSpy.MemoryManager;
+  System.SysUtils, System.Classes, System.TypInfo, VclSpy.MemoryManager;
 
 var
-  FOwnVcl: Boolean;
+  FOwnRtl: Boolean;
 
-function OwnVcl: Boolean;
+function OwnRtl: Boolean;
 begin
-  Result := FOwnVcl;
+  Result := FOwnRtl;
+end;
+
+function AncestorNamed(Obj: TObject; const Name: string): TClass;
+begin
+  if Obj = nil then
+    Exit(nil);
+  Result := Obj.ClassType;
+  while (Result <> nil) and not Result.ClassNameIs(Name) do
+    Result := Result.ClassParent;
+end;
+
+function IsKindOfName(Obj: TObject; const Name: string): Boolean;
+begin
+  Result := AncestorNamed(Obj, Name) <> nil;
 end;
 
 function TargetClass(Obj: TObject; Cls: TClass): TClass;
-var
-  Name: string;
 begin
   Result := Obj.ClassType;
   if Obj.InheritsFrom(Cls) then
@@ -83,9 +94,7 @@ begin
       Result := Result.ClassParent;
     Exit;
   end;
-  Name := Cls.ClassName;
-  while (Result <> nil) and not Result.ClassNameIs(Name) do
-    Result := Result.ClassParent;
+  Result := AncestorNamed(Obj, Cls.ClassName);
 end;
 
 function IsKindOf(Obj: TObject; Cls: TClass): Boolean;
@@ -95,41 +104,39 @@ begin
   else if Obj.InheritsFrom(Cls) then
     Result := True
   else
-    Result := FOwnVcl and (TargetClass(Obj, Cls) <> nil);
+    Result := FOwnRtl and (TargetClass(Obj, Cls) <> nil);
 end;
 
-function CheckTarget(Ctrl: TControl; out Error: string): Boolean;
-const
-  Classes: array[0..2] of TClass = (TComponent, TControl, TWinControl);
+function CheckRtl(Obj: TObject; out Error: string): Boolean;
 var
-  Cls, Target: TClass;
+  Target: TClass;
   Size, Props: Integer;
 begin
-  for Cls in Classes do
+  Target := TargetClass(Obj, TComponent);
+  if Target = nil then
   begin
-    if (Cls = TWinControl) and not IsKindOf(Ctrl, TWinControl) then
-      Break;
-    Target := TargetClass(Ctrl, Cls);
-    if Target = nil then
-    begin
-      Error := Format('%s is not a VCL control: it doesn''t inherit from %s.', [Ctrl.ClassName, Cls.ClassName]);
-      Exit(False);
-    end;
-    Size := Target.InstanceSize;
-    Props := GetTypeData(Target.ClassInfo)^.PropCount;
-    if (Size <> Cls.InstanceSize) or (Props <> GetTypeData(Cls.ClassInfo)^.PropCount) then
-    begin
-      Error := Format('The target''s VCL doesn''t match the inspector''s (Delphi %.1f): its %s has %d bytes ' +
-        'and %d published properties, the inspector''s %d and %d. The target may be built with another ' +
-        'Delphi version.', [CompilerVersion, Cls.ClassName, Size, Props, Cls.InstanceSize,
-        GetTypeData(Cls.ClassInfo)^.PropCount]);
-      Exit(False);
-    end;
+    Error := Format('%s is not a component: it doesn''t inherit from TComponent.', [Obj.ClassName]);
+    Exit(False);
+  end;
+  if not FOwnRtl and (Target <> TComponent) then
+  begin
+    Error := Format('%s belongs to a module with an RTL of its own (%s), not to the shared rtl package.',
+      [Obj.ClassName, ExtractFileName(GetModuleName(ModuleOf(Target)))]);
+    Exit(False);
+  end;
+  Size := Target.InstanceSize;
+  Props := GetTypeData(Target.ClassInfo)^.PropCount;
+  if (Size <> TComponent.InstanceSize) or (Props <> GetTypeData(TComponent.ClassInfo)^.PropCount) then
+  begin
+    Error := Format('The target''s RTL doesn''t match the inspector''s (Delphi %.1f): its TComponent has %d ' +
+      'bytes and %d published properties, the inspector''s %d and %d. The target may be built with another ' +
+      'Delphi version.', [CompilerVersion, Size, Props, TComponent.InstanceSize,
+      GetTypeData(TComponent.ClassInfo)^.PropCount]);
+    Exit(False);
   end;
   Result := True;
 end;
 
-// True if P points to a Delphi object: its class's vmtSelfPtr points back
 function LooksLikeObject(P: Pointer): Boolean;
 var
   Vmt: PByte;
@@ -140,83 +147,6 @@ begin
   except
     Result := False;
   end;
-end;
-
-function FindTargetControl(Wnd: HWND): TWinControl;
-var
-  Atom: TAtom;
-  Pid: DWORD;
-  P: Pointer;
-begin
-  if not FOwnVcl then
-    Exit(FindControl(Wnd));
-  Result := nil;
-  if (Wnd = 0) or (GetWindowThreadProcessId(Wnd, Pid) = 0) or (Pid <> GetCurrentProcessId) then
-    Exit;
-  // Vcl.Controls sets this property for every window it creates, in every module
-  Atom := GlobalFindAtom(PChar(Format('Delphi%.8X', [GetCurrentProcessId])));
-  if Atom = 0 then
-    Exit;
-  P := Pointer(GetProp(Wnd, MakeIntAtom(Atom)));
-  if (P <> nil) and LooksLikeObject(P) and IsKindOf(TObject(P), TWinControl) then
-    Result := TWinControl(P);
-end;
-
-function WindowControl(Wnd: HWND): TWinControl;
-begin
-  Result := nil;
-  while (Wnd <> 0) and (Result = nil) do
-  begin
-    Result := FindTargetControl(Wnd);
-    if Result = nil then
-      Wnd := GetParent(Wnd);
-  end;
-end;
-
-function CollectForm(Wnd: HWND; List: TList<TWinControl>): BOOL; stdcall;
-var
-  Ctrl: TWinControl;
-  Error: string;
-begin
-  try
-    Ctrl := FindTargetControl(Wnd);
-    if (Ctrl <> nil) and CheckTarget(Ctrl, Error) and (Ctrl.Parent = nil) then
-      List.Add(Ctrl);
-  except
-    // Not into EnumWindows
-  end;
-  Result := True;
-end;
-
-function TargetForms: TArray<TWinControl>;
-var
-  List: TList<TWinControl>;
-  I: Integer;
-begin
-  if not FOwnVcl then
-  begin
-    SetLength(Result, Screen.CustomFormCount);
-    for I := 0 to Screen.CustomFormCount - 1 do
-      Result[I] := Screen.CustomForms[I];
-    Exit;
-  end;
-  List := TList<TWinControl>.Create;
-  try
-    EnumWindows(@CollectForm, LPARAM(List));
-    Result := List.ToArray;
-  finally
-    List.Free;
-  end;
-end;
-
-function TopParentForm(Ctrl: TControl): TCustomForm;
-begin
-  while Ctrl.Parent <> nil do
-    Ctrl := Ctrl.Parent;
-  if IsKindOf(Ctrl, TCustomForm) then
-    Result := TCustomForm(Ctrl)
-  else
-    Result := nil;
 end;
 
 function ModuleOf(Address: Pointer): HMODULE;
@@ -260,6 +190,6 @@ begin
 end;
 
 initialization
-  // A package that links the VCL: not the target's module, nor its packages
-  FOwnVcl := ModuleIsPackage and (FindClassHInstance(TControl) = HInstance);
+  // A package that links the RTL: not the target's module, nor its packages
+  FOwnRtl := ModuleIsPackage and (FindClassHInstance(TComponent) = HInstance);
 end.
