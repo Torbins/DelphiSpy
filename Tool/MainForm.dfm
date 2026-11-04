@@ -366,9 +366,35 @@ object frmMain: TfrmMain
         ViewStyle = vsReport
       end
     end
-    object tabHierarchy: TTabSheet
-      Caption = 'Hierarchy'
-      object tvHierarchy: TTreeView
+    object tabParents: TTabSheet
+      Caption = 'Parents'
+      object tvParents: TTreeView
+        Left = 0
+        Top = 0
+        Width = 752
+        Height = 299
+        Align = alClient
+        Indent = 19
+        ReadOnly = True
+        TabOrder = 0
+      end
+    end
+    object tabOwners: TTabSheet
+      Caption = 'Owners'
+      object tvOwners: TTreeView
+        Left = 0
+        Top = 0
+        Width = 752
+        Height = 299
+        Align = alClient
+        Indent = 19
+        ReadOnly = True
+        TabOrder = 0
+      end
+    end
+    object tabClasses: TTabSheet
+      Caption = 'Classes'
+      object tvClasses: TTreeView
         Left = 0
         Top = 0
         Width = 752

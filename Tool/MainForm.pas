@@ -42,8 +42,12 @@ type
     lvProperties: TListView;
     tabEvents: TTabSheet;
     lvEvents: TListView;
-    tabHierarchy: TTabSheet;
-    tvHierarchy: TTreeView;
+    tabParents: TTabSheet;
+    tvParents: TTreeView;
+    tabOwners: TTabSheet;
+    tvOwners: TTreeView;
+    tabClasses: TTabSheet;
+    tvClasses: TTreeView;
     tabJson: TTabSheet;
     memJson: TMemo;
     tabHistory: TTabSheet;
@@ -94,7 +98,9 @@ type
     procedure ClearDetails;
     procedure FillProperties;
     procedure FillEvents(Control: TJSONObject);
-    procedure FillHierarchy(Control: TJSONObject);
+    procedure FillParents(Control: TJSONObject);
+    procedure FillOwners(Control: TJSONObject);
+    procedure FillClasses(Control: TJSONObject);
     procedure FlashRect(const R: TRect);
   end;
 
@@ -175,6 +181,26 @@ begin
   if Result = '' then
     Result := '<unnamed>';
   Result := Result + ': ' + JStr(Obj, 'className');
+end;
+
+// Each caption becomes a child of the one before it, outermost first
+procedure FillChain(Tree: TTreeView; const Captions: TArray<string>);
+var
+  Node: TTreeNode;
+  Caption: string;
+begin
+  Tree.Items.BeginUpdate;
+  try
+    Tree.Items.Clear;
+    Node := nil;
+    for Caption in Captions do
+      Node := Tree.Items.AddChild(Node, Caption);
+    Tree.FullExpand;
+  finally
+    Tree.Items.EndUpdate;
+  end;
+  if Tree.Items.Count > 0 then
+    Tree.Items[0].MakeVisible;
 end;
 
 { TfrmMain }
@@ -315,7 +341,9 @@ begin
   edtText.Text := JStr(Control, 'text');
   FillProperties;
   FillEvents(Control);
-  FillHierarchy(Control);
+  FillParents(Control);
+  FillOwners(Control);
+  FillClasses(Control);
 
   ShowInfo(Format('%s   PID %s   %s', [JStr(FReport, 'inspector'), JStr(FReport, 'process.pid'),
     JStr(FReport, 'process.exe')]));
@@ -367,7 +395,9 @@ begin
   edtText.Text := '';
   lvProperties.Items.Clear;
   lvEvents.Items.Clear;
-  tvHierarchy.Items.Clear;
+  tvParents.Items.Clear;
+  tvOwners.Items.Clear;
+  tvClasses.Items.Clear;
   UpdatePropertyButtons;
 end;
 
@@ -602,7 +632,7 @@ begin
   tabEvents.Caption := Format('Events (%d)', [lvEvents.Items.Count]);
 end;
 
-procedure TfrmMain.FillHierarchy(Control: TJSONObject);
+procedure TfrmMain.FillParents(Control: TJSONObject);
 
   function Flags(Obj: TJSONObject): string;
   begin
@@ -614,58 +644,60 @@ procedure TfrmMain.FillHierarchy(Control: TJSONObject);
   end;
 
 var
-  Items: TTreeNodes;
-  Node: TTreeNode;
+  Captions: TArray<string>;
+  List: TJSONArray;
+  Obj: TJSONObject;
+  I: Integer;
+begin
+  List := JArr(Control, 'parents');
+  if List <> nil then
+    for I := List.Count - 1 downto 0 do
+    begin
+      Obj := List.Items[I] as TJSONObject;
+      Captions := Captions + [NameOrClass(Obj) + Flags(Obj)];
+    end;
+  FillChain(tvParents, Captions + ['> ' + NameOrClass(Control) + Flags(Control)]);
+end;
+
+procedure TfrmMain.FillOwners(Control: TJSONObject);
+var
+  Captions: TArray<string>;
   List: TJSONArray;
   Obj, Action: TJSONObject;
   I: Integer;
 begin
-  Items := tvHierarchy.Items;
-  Items.BeginUpdate;
-  try
-    Items.Clear;
+  List := JArr(Control, 'owners');
+  if List <> nil then
+    for I := List.Count - 1 downto 0 do
+    begin
+      Obj := List.Items[I] as TJSONObject;
+      Captions := Captions + [Format('%s   (%s, unit %s)', [NameOrClass(Obj), JStr(Obj, 'kind'),
+        JStr(Obj, 'unitName')])];
+    end;
+  FillChain(tvOwners, Captions + ['> ' + NameOrClass(Control)]);
 
-    Node := Items.Add(nil, 'Visual parents (Parent)');
-    List := JArr(Control, 'parents');
-    if List <> nil then
-      for I := List.Count - 1 downto 0 do
-      begin
-        Obj := List.Items[I] as TJSONObject;
-        Node := Items.AddChild(Node, NameOrClass(Obj) + Flags(Obj));
-      end;
-    Items.AddChild(Node, '> ' + NameOrClass(Control) + Flags(Control));
+  // Not part of the Owner chain, but it is also found by owner path
+  Action := JObj(Control, 'action');
+  if Action <> nil then
+    tvOwners.Items.Add(nil, Format('Action: %s: %s', [JStr(Action, 'path'), JStr(Action, 'className')]));
+end;
 
-    Node := Items.Add(nil, 'Owners (Owner)');
-    List := JArr(Control, 'owners');
-    if List <> nil then
-      for I := List.Count - 1 downto 0 do
-      begin
-        Obj := List.Items[I] as TJSONObject;
-        Node := Items.AddChild(Node, Format('%s   (%s, unit %s)', [NameOrClass(Obj),
-          JStr(Obj, 'kind'), JStr(Obj, 'unitName')]));
-      end;
-    Items.AddChild(Node, '> ' + NameOrClass(Control));
-
-    Node := Items.Add(nil, 'Class hierarchy');
-    List := JArr(Control, 'classHierarchy');
-    if List <> nil then
-      for I := List.Count - 1 downto 0 do
-      begin
-        Obj := List.Items[I] as TJSONObject;
-        Node := Items.AddChild(Node, Format('%s   (unit %s, %s)', [JStr(Obj, 'className'),
-          JStr(Obj, 'unitName'), JStr(Obj, 'module')]));
-      end;
-
-    Action := JObj(Control, 'action');
-    if Action <> nil then
-      Items.Add(nil, Format('Action: %s: %s', [JStr(Action, 'path'), JStr(Action, 'className')]));
-
-    tvHierarchy.FullExpand;
-  finally
-    Items.EndUpdate;
-  end;
-  if Items.Count > 0 then
-    Items[0].MakeVisible;
+procedure TfrmMain.FillClasses(Control: TJSONObject);
+var
+  Captions: TArray<string>;
+  List: TJSONArray;
+  Obj: TJSONObject;
+  I: Integer;
+begin
+  List := JArr(Control, 'classHierarchy');
+  if List <> nil then
+    for I := List.Count - 1 downto 0 do
+    begin
+      Obj := List.Items[I] as TJSONObject;
+      Captions := Captions + [Format('%s   (unit %s, %s)', [JStr(Obj, 'className'),
+        JStr(Obj, 'unitName'), JStr(Obj, 'module')])];
+    end;
+  FillChain(tvClasses, Captions);
 end;
 
 procedure TfrmMain.FlashRect(const R: TRect);
