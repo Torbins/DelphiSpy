@@ -1,7 +1,7 @@
 object frmFmxTest: TfrmFmxTest
   Left = 200
   Top = 200
-  Caption = 'VclSpy FMX Test'
+  Caption = 'DelphiSpy FMX Test'
   ClientHeight = 320
   ClientWidth = 460
   Position = Designed

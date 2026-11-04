@@ -1,14 +1,14 @@
-unit VclSpy.Properties;
+unit DelphiSpy.Properties;
 
-{ Converts property values between their text form, as VclSpy shows and
+{ Converts property values between their text form, as DelphiSpy shows and
   edits them, and the target's own values. Runs inside the target, like
-  VclSpy.Inspector.
+  DelphiSpy.Inspector.
 
   Editable are published properties of simple types (numbers, characters,
   strings, enumerations, sets of up to 32 elements) and the extra properties
-  that a framework's unit registers (RegisterExtraProp): VclSpy.VclProperties
+  that a framework's unit registers (RegisterExtraProp): DelphiSpy.VclProperties
   adds the TControl and TWinControl properties declared public or protected,
-  which RTTI doesn't list unless a class republishes them. VclSpy.Members
+  which RTTI doesn't list unless a class republishes them. DelphiSpy.Members
   reaches the properties of objects and the fields of records that properties
   return.
 
@@ -16,7 +16,7 @@ unit VclSpy.Properties;
   clRed, come from the framework's units too (RegisterOrdNames).
 
   A no-packages inspector that doesn't share the target's memory manager
-  (VclSpy.Target.TargetMayKeepOurMemory) must not let the target keep a
+  (DelphiSpy.Target.TargetMayKeepOurMemory) must not let the target keep a
   string it allocated: the target would free it with its own memory manager.
   String setters of the target get a copy that looks like a string literal,
   which they copy when they assign it. Strings that the inspector's code
@@ -58,7 +58,7 @@ type
   TOrdNames = record
     ToText: TFunc<Integer, string>;
     FromText: TTextToOrdFunc;
-    // The names VclSpy's editor offers; may be nil
+    // The names DelphiSpy's editor offers; may be nil
     GetValues: TProc<TGetStrProc>;
     // The message when FromText fails, with %s for the text
     Error: string;
@@ -72,7 +72,7 @@ function SetElementType(Info: PTypeInfo): PTypeInfo;
 // when the text doesn't fit it
 function TextToOrd(Info: PTypeInfo; const Text: string): Int64;
 function TextToFloat(Info: PTypeInfo; const Text: string): Extended;
-// Types whose values VclSpy edits as text
+// Types whose values DelphiSpy edits as text
 function IsEditableType(Info: PTypeInfo): Boolean;
 
 // Whether the target may keep the string that the setter of Prop gets (see
@@ -97,16 +97,16 @@ function ExtraPropsOf(Obj: TObject): TArray<TExtraProp>;
 // For the integer type named TypeName (TColor)
 procedure RegisterOrdNames(const TypeName: string; const Names: TOrdNames);
 
-// "integer", "enum", "set", "string"... for VclSpy's editor
+// "integer", "enum", "set", "string"... for DelphiSpy's editor
 function KindName(Info: PTypeInfo): string;
-// Names VclSpy offers in its editor: enumeration values, set elements, color
+// Names DelphiSpy offers in its editor: enumeration values, set elements, color
 // and cursor names. nil for types without names.
 function TypeValuesJson(Info: PTypeInfo): TJSONArray;
 
 implementation
 
 uses
-  System.Variants, VclSpy.Target;
+  System.Variants, DelphiSpy.Target;
 
 type
   TOrdNamesEntry = record
@@ -328,7 +328,7 @@ begin
 end;
 
 // TComponent.Name: writable, but renaming breaks FindComponent lookups and the
-// paths VclSpy shows. Other properties named so (Font.Name) are editable.
+// paths DelphiSpy shows. Other properties named so (Font.Name) are editable.
 function IsComponentName(Prop: PPropInfo): Boolean;
 begin
   Result := SameText(GetPropName(Prop), 'Name') and IsType(Prop^.PropType^, 'TComponentName');
@@ -437,7 +437,7 @@ begin
     raise EConvertError.CreateFmt('%s (%s) cannot be edited: the inspector doesn''t share the ' +
       'target''s memory manager.', [GetPropName(Prop), GetTypeName(Info)]);
   if not IsEditablePublished(Prop) then
-    raise EConvertError.CreateFmt('%s (%s) cannot be edited in VclSpy.', [GetPropName(Prop), GetTypeName(Info)]);
+    raise EConvertError.CreateFmt('%s (%s) cannot be edited in DelphiSpy.', [GetPropName(Prop), GetTypeName(Info)]);
   case Info^.Kind of
     tkInteger, tkChar, tkWChar, tkEnumeration, tkSet:
       SetOrdProp(Instance, Prop, NativeInt(TextToOrd(Info, Text)));

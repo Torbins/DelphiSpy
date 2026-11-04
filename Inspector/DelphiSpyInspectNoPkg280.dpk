@@ -1,0 +1,31 @@
+package DelphiSpyInspectNoPkg280;
+
+{ Inspector for Delphi 11 targets built without runtime packages, the fallback
+  when the target loads no vcl280.bpl. A package without requires clause, so
+  it contains the RTL and VCL itself, built as DelphiSpyInspectNoPkg280.dll
+  (see build.cmd and DelphiSpy.NoPkg). DelphiSpy.Target reaches the target's
+  controls, which must be of the same Delphi version.
+  DelphiSpy.MemoryManager must stay the first unit. }
+
+{$IFNDEF VER350}
+  {$MESSAGE FATAL 'DelphiSpyInspectNoPkg280 must be built with Delphi 11.'}
+{$ENDIF}
+
+{$E dll}
+{$RUNONLY}
+{$IMPLICITBUILD ON}
+{$DESCRIPTION 'DelphiSpy inspector for Delphi 11 targets without runtime packages'}
+
+contains
+  DelphiSpy.MemoryManager in 'DelphiSpy.MemoryManager.pas',
+  DelphiSpy.Protocol in '..\Common\DelphiSpy.Protocol.pas',
+  DelphiSpy.Target in 'DelphiSpy.Target.pas',
+  DelphiSpy.Properties in 'DelphiSpy.Properties.pas',
+  DelphiSpy.Members in 'DelphiSpy.Members.pas',
+  DelphiSpy.Report in 'DelphiSpy.Report.pas',
+  DelphiSpy.VclProperties in 'DelphiSpy.VclProperties.pas',
+  DelphiSpy.Inspector in 'DelphiSpy.Inspector.pas',
+  DelphiSpy.SelfFinalize in 'DelphiSpy.SelfFinalize.pas',
+  DelphiSpy.NoPkg in 'DelphiSpy.NoPkg.pas';
+
+end.

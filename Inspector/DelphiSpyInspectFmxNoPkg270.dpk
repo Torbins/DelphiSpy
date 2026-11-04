@@ -1,0 +1,31 @@
+package DelphiSpyInspectFmxNoPkg270;
+
+{ Inspector for FireMonkey targets built with Delphi 10.4 without runtime
+  packages, the fallback when the target loads no fmx270.bpl. A package
+  without requires clause, so it contains the RTL itself, built as
+  DelphiSpyInspectFmxNoPkg270.dll (see build.cmd and DelphiSpy.FmxNoPkg). It
+  links no FMX unit: DelphiSpy.FmxInspector reaches the target's FMX objects
+  through RTTI, which must be of the same Delphi version.
+  DelphiSpy.MemoryManager must stay the first unit. }
+
+{$IFNDEF VER340}
+  {$MESSAGE FATAL 'DelphiSpyInspectFmxNoPkg270 must be built with Delphi 10.4.'}
+{$ENDIF}
+
+{$E dll}
+{$RUNONLY}
+{$IMPLICITBUILD ON}
+{$DESCRIPTION 'DelphiSpy inspector for FireMonkey targets of Delphi 10.4 without runtime packages'}
+
+contains
+  DelphiSpy.MemoryManager in 'DelphiSpy.MemoryManager.pas',
+  DelphiSpy.Protocol in '..\Common\DelphiSpy.Protocol.pas',
+  DelphiSpy.Target in 'DelphiSpy.Target.pas',
+  DelphiSpy.Properties in 'DelphiSpy.Properties.pas',
+  DelphiSpy.Members in 'DelphiSpy.Members.pas',
+  DelphiSpy.Report in 'DelphiSpy.Report.pas',
+  DelphiSpy.FmxInspector in 'DelphiSpy.FmxInspector.pas',
+  DelphiSpy.SelfFinalize in 'DelphiSpy.SelfFinalize.pas',
+  DelphiSpy.FmxNoPkg in 'DelphiSpy.FmxNoPkg.pas';
+
+end.

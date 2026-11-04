@@ -1,10 +1,10 @@
-program VclSpyRemote;
+program DelphiSpyRemote;
 
-{ Command-line client for applications that link VclSpy.Server, the network
-  counterpart of VclSpyInject.exe. Built as Win32.
+{ Command-line client for applications that link DelphiSpy.Server, the network
+  counterpart of DelphiSpyInject.exe. Built as Win32.
 
-  Usage: VclSpyRemote.exe --list [--hosts <hosts>] [--timeout <ms>]
-         VclSpyRemote.exe --server <text> --request <file | -> [--hosts <hosts>]
+  Usage: DelphiSpyRemote.exe --list [--hosts <hosts>] [--timeout <ms>]
+         DelphiSpyRemote.exe --server <text> --request <file | -> [--hosts <hosts>]
                           [--password <password>] [--timeout <ms>]
   --list prints the servers found as a JSON array. --hosts names the hosts or
   IPv4 addresses to search, separated by ";" or ","; an address ending in .0
@@ -12,7 +12,7 @@ program VclSpyRemote;
   searched by broadcast. --server picks the server whose description or
   address contains <text> (or whose number in the list it is, from 1).
   --request sends each line of a UTF-8 file or of stdin as a request (see
-  VclSpyRequest in Inspector\VclSpy.Inspector.pas, and ops "forms" and
+  DelphiSpyRequest in Inspector\DelphiSpy.Inspector.pas, and ops "forms" and
   "pick"), and prints each reply on a line. Exit code 0 means every reply has
   "ok":true. }
 
@@ -24,8 +24,8 @@ uses
   System.Classes,
   System.IOUtils,
   System.JSON,
-  VclSpy.Protocol in '..\Common\VclSpy.Protocol.pas',
-  VclSpy.RemoteClient in '..\Common\VclSpy.RemoteClient.pas';
+  DelphiSpy.Protocol in '..\Common\DelphiSpy.Protocol.pas',
+  DelphiSpy.RemoteClient in '..\Common\DelphiSpy.RemoteClient.pas';
 
 const
   DiscoveryTimeout = 3000;
@@ -123,7 +123,7 @@ begin
   for Server in Servers do
     if Server.Description.ToLower.Contains(Text.ToLower) or Server.Address.Contains(Text) then
       Exit(Server);
-  raise ERemoteError.CreateFmt('No VclSpy server matches "%s". Found: %s', [Text, ServersJson(Servers)]);
+  raise ERemoteError.CreateFmt('No DelphiSpy server matches "%s". Found: %s', [Text, ServersJson(Servers)]);
 end;
 
 var
@@ -135,10 +135,10 @@ var
 begin
   AllOk := False;
   try
-    Timeout := StrToIntDef(ArgOr('timeout', ''), VclSpyRemoteTimeout);
+    Timeout := StrToIntDef(ArgOr('timeout', ''), DelphiSpyRemoteTimeout);
     if not HasFlag('list') and not (FindArg('server', ServerText) and FindArg('request', Source)) then
-      raise EArgumentException.Create('Usage: VclSpyRemote.exe --list [--hosts <hosts>] [--timeout <ms>], or ' +
-        'VclSpyRemote.exe --server <text> --request <file | -> [--hosts <hosts>] [--password <password>] ' +
+      raise EArgumentException.Create('Usage: DelphiSpyRemote.exe --list [--hosts <hosts>] [--timeout <ms>], or ' +
+        'DelphiSpyRemote.exe --server <text> --request <file | -> [--hosts <hosts>] [--password <password>] ' +
         '[--timeout <ms>]');
     Client := TRemoteClient.Create;
     try

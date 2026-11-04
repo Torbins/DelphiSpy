@@ -1,7 +1,7 @@
 # Starts every TestTarget and FmxTestTarget variant, inspects its controls
-# through bin\<arch>\VclSpyInject.exe and checks the JSON replies. The
-# variants that link VclSpy.Server (VclSpy.FmxServer) are inspected over the
-# network, through bin\VclSpyRemote.exe.
+# through bin\<arch>\DelphiSpyInject.exe and checks the JSON replies. The
+# variants that link DelphiSpy.Server (DelphiSpy.FmxServer) are inspected over the
+# network, through bin\DelphiSpyRemote.exe.
 # Run build.cmd first. Usage: powershell -ExecutionPolicy Bypass -File Test\run-tests.ps1
 # -Only <pattern> runs the variants whose folder in Test\bin matches it (fmx-*).
 
@@ -40,7 +40,7 @@ public static class Win {
         return found;
     }
 
-    // Physical screen coordinates, the same space VclSpy.exe works in
+    // Physical screen coordinates, the same space DelphiSpy.exe works in
     public static int[] Center(IntPtr wnd) {
         SetThreadDpiAwarenessContext(new IntPtr(-4));
         RECT r; GetWindowRect(wnd, out r);
@@ -71,7 +71,7 @@ function CheckLike($Label, $Actual, $Pattern) {
 
 function Inspect($Arch, [IntPtr]$Wnd) {
     $pt = [Win]::Center($Wnd)
-    $out = & "$Root\bin\$Arch\VclSpyInject.exe" --hwnd $Wnd.ToInt64() --x $pt[0] --y $pt[1]
+    $out = & "$Root\bin\$Arch\DelphiSpyInject.exe" --hwnd $Wnd.ToInt64() --x $pt[0] --y $pt[1]
     return ($out -join '') | ConvertFrom-Json
 }
 
@@ -80,7 +80,7 @@ function Inspect($Arch, [IntPtr]$Wnd) {
 function Request($Arch, $Report, [hashtable]$Body) {
     if (-not $Body.ContainsKey('address')) { $Body.address = $Report.control.address }
     $out = ($Body | ConvertTo-Json -Compress) |
-        & "$Root\bin\$Arch\VclSpyInject.exe" --hwnd $Report.window.hwnd --request -
+        & "$Root\bin\$Arch\DelphiSpyInject.exe" --hwnd $Report.window.hwnd --request -
     return ($out -join '') | ConvertFrom-Json
 }
 
@@ -131,17 +131,17 @@ function Start-Target($Dir, $Title, $Exe = 'TestTarget', $Class = 'TfrmTest') {
 
 # Memory: the memory manager a no-packages inspector should report, $null for packages
 $variants = @(
-    @{ Dir = '270-x86'; Arch = 'x86'; Title = 'VclSpy Test 34 x86 packages'; Memory = $null },
-    @{ Dir = '270-x64'; Arch = 'x64'; Title = 'VclSpy Test 34 x64 packages'; Memory = $null },
-    @{ Dir = '280-x86'; Arch = 'x86'; Title = 'VclSpy Test 35 x86 packages'; Memory = $null },
-    @{ Dir = '280-x64'; Arch = 'x64'; Title = 'VclSpy Test 35 x64 packages'; Memory = $null },
+    @{ Dir = '270-x86'; Arch = 'x86'; Title = 'DelphiSpy Test 34 x86 packages'; Memory = $null },
+    @{ Dir = '270-x64'; Arch = 'x64'; Title = 'DelphiSpy Test 34 x64 packages'; Memory = $null },
+    @{ Dir = '280-x86'; Arch = 'x86'; Title = 'DelphiSpy Test 35 x86 packages'; Memory = $null },
+    @{ Dir = '280-x64'; Arch = 'x64'; Title = 'DelphiSpy Test 35 x64 packages'; Memory = $null },
     # 280 is tried first and refuses the 270 target
-    @{ Dir = '270-x86-nopkg'; Arch = 'x86'; Title = 'VclSpy Test 34 x86 static'; Memory = 'own, guarded' },
-    @{ Dir = '280-x86-nopkg'; Arch = 'x86'; Title = 'VclSpy Test 35 x86 static'; Memory = 'own, guarded' },
-    @{ Dir = '280-x64-nopkg'; Arch = 'x64'; Title = 'VclSpy Test 35 x64 static'; Memory = 'own, guarded' },
-    @{ Dir = '280-x86-sharemem'; Arch = 'x86'; Title = 'VclSpy Test 35 x86 static ShareMem'; Memory = 'borlndmm.dll' },
-    @{ Dir = '280-x64-sharemem'; Arch = 'x64'; Title = 'VclSpy Test 35 x64 static ShareMem'; Memory = 'borlndmm.dll' },
-    @{ Dir = '280-x86-simplesharemem'; Arch = 'x86'; Title = 'VclSpy Test 35 x86 static SimpleShareMem'; Memory = 'shared by the target' }
+    @{ Dir = '270-x86-nopkg'; Arch = 'x86'; Title = 'DelphiSpy Test 34 x86 static'; Memory = 'own, guarded' },
+    @{ Dir = '280-x86-nopkg'; Arch = 'x86'; Title = 'DelphiSpy Test 35 x86 static'; Memory = 'own, guarded' },
+    @{ Dir = '280-x64-nopkg'; Arch = 'x64'; Title = 'DelphiSpy Test 35 x64 static'; Memory = 'own, guarded' },
+    @{ Dir = '280-x86-sharemem'; Arch = 'x86'; Title = 'DelphiSpy Test 35 x86 static ShareMem'; Memory = 'borlndmm.dll' },
+    @{ Dir = '280-x64-sharemem'; Arch = 'x64'; Title = 'DelphiSpy Test 35 x64 static ShareMem'; Memory = 'borlndmm.dll' },
+    @{ Dir = '280-x86-simplesharemem'; Arch = 'x86'; Title = 'DelphiSpy Test 35 x86 static SimpleShareMem'; Memory = 'shared by the target' }
 )
 
 foreach ($v in $variants) {
@@ -152,7 +152,7 @@ foreach ($v in $variants) {
         $r = Inspect $v.Arch (Child $form 'TButton' 'OK')
         Check 'ok' $r.ok $true
         if ($v.Memory) {
-            CheckLike 'inspector' $r.inspector "VclSpyInspectNoPkg$($v.Dir.Substring(0, 3)).dll*"
+            CheckLike 'inspector' $r.inspector "DelphiSpyInspectNoPkg$($v.Dir.Substring(0, 3)).dll*"
             Check 'memory manager' $r.process.memoryManager $v.Memory
             Check 'VCL module' $r.process.vclModule 'TestTarget.exe'
         }
@@ -223,7 +223,7 @@ foreach ($v in $variants) {
         $other = if ($v.Arch -eq 'x86') { 'x64' } else { 'x86' }
         $r = Inspect $other $ok
         Check 'wrong-bitness injector ok' $r.ok $false
-        CheckLike 'wrong-bitness injector error' $r.error "*use $($v.Arch)\VclSpyInject.exe*"
+        CheckLike 'wrong-bitness injector error' $r.error "*use $($v.Arch)\DelphiSpyInject.exe*"
 
         # Editing
         $r = Inspect $v.Arch $ok
@@ -434,7 +434,7 @@ foreach ($v in $variants) {
 # the screenRect a "get" reports.
 
 function FmxRequest($Arch, [IntPtr]$Form, [hashtable]$Body) {
-    $out = ($Body | ConvertTo-Json -Compress) | & "$Root\bin\$Arch\VclSpyInject.exe" --hwnd $Form.ToInt64() --request -
+    $out = ($Body | ConvertTo-Json -Compress) | & "$Root\bin\$Arch\DelphiSpyInject.exe" --hwnd $Form.ToInt64() --request -
     return ($out -join '') | ConvertFrom-Json
 }
 
@@ -459,7 +459,7 @@ function RectCenter($Rect) {
 
 # Inspects the control at a physical screen point, as the finder would
 function InspectAt($Arch, [IntPtr]$Wnd, [int[]]$Pt) {
-    $out = & "$Root\bin\$Arch\VclSpyInject.exe" --hwnd $Wnd.ToInt64() --x $Pt[0] --y $Pt[1]
+    $out = & "$Root\bin\$Arch\DelphiSpyInject.exe" --hwnd $Wnd.ToInt64() --x $Pt[0] --y $Pt[1]
     return ($out -join '') | ConvertFrom-Json
 }
 
@@ -476,13 +476,13 @@ function Close-FmxTarget($Proc, [IntPtr]$Form) {
 
 # Inspector: the DLL the hook stub should load; Memory as for the VCL variants
 $fmxVariants = @(
-    @{ Dir = 'fmx-280-x86'; Arch = 'x86'; Title = 'VclSpy FMX Test 35 x86 packages'; Inspector = 'VclSpyInspectFmx280.dll'; Memory = $null },
-    @{ Dir = 'fmx-270-x64'; Arch = 'x64'; Title = 'VclSpy FMX Test 34 x64 packages'; Inspector = 'VclSpyInspectFmx270.dll'; Memory = $null },
-    @{ Dir = 'fmx-280-x64-nopkg'; Arch = 'x64'; Title = 'VclSpy FMX Test 35 x64 static'; Inspector = 'VclSpyInspectFmxNoPkg280.dll'; Memory = 'own, guarded' },
+    @{ Dir = 'fmx-280-x86'; Arch = 'x86'; Title = 'DelphiSpy FMX Test 35 x86 packages'; Inspector = 'DelphiSpyInspectFmx280.dll'; Memory = $null },
+    @{ Dir = 'fmx-270-x64'; Arch = 'x64'; Title = 'DelphiSpy FMX Test 34 x64 packages'; Inspector = 'DelphiSpyInspectFmx270.dll'; Memory = $null },
+    @{ Dir = 'fmx-280-x64-nopkg'; Arch = 'x64'; Title = 'DelphiSpy FMX Test 35 x64 static'; Inspector = 'DelphiSpyInspectFmxNoPkg280.dll'; Memory = 'own, guarded' },
     # 280 is tried first and refuses the 270 target
-    @{ Dir = 'fmx-270-x86-nopkg'; Arch = 'x86'; Title = 'VclSpy FMX Test 34 x86 static'; Inspector = 'VclSpyInspectFmxNoPkg270.dll'; Memory = 'own, guarded' },
-    @{ Dir = 'fmx-280-x86-sharemem'; Arch = 'x86'; Title = 'VclSpy FMX Test 35 x86 static ShareMem'; Inspector = 'VclSpyInspectFmxNoPkg280.dll'; Memory = 'borlndmm.dll' },
-    @{ Dir = 'fmx-280-x64-simplesharemem'; Arch = 'x64'; Title = 'VclSpy FMX Test 35 x64 static SimpleShareMem'; Inspector = 'VclSpyInspectFmxNoPkg280.dll'; Memory = 'shared by the target' }
+    @{ Dir = 'fmx-270-x86-nopkg'; Arch = 'x86'; Title = 'DelphiSpy FMX Test 34 x86 static'; Inspector = 'DelphiSpyInspectFmxNoPkg270.dll'; Memory = 'own, guarded' },
+    @{ Dir = 'fmx-280-x86-sharemem'; Arch = 'x86'; Title = 'DelphiSpy FMX Test 35 x86 static ShareMem'; Inspector = 'DelphiSpyInspectFmxNoPkg280.dll'; Memory = 'borlndmm.dll' },
+    @{ Dir = 'fmx-280-x64-simplesharemem'; Arch = 'x64'; Title = 'DelphiSpy FMX Test 35 x64 static SimpleShareMem'; Inspector = 'DelphiSpyInspectFmxNoPkg280.dll'; Memory = 'shared by the target' }
 )
 
 foreach ($v in $fmxVariants) {
@@ -654,27 +654,27 @@ foreach ($v in $fmxVariants) {
 }
 
 
-# Sends requests, one per line, to the VclSpy.Server whose description has
+# Sends requests, one per line, to the DelphiSpy.Server whose description has
 # $Server, and returns the replies
 function Remote($Server, $Password, [object[]]$Bodies) {
     $lines = ($Bodies | ForEach-Object { $_ | ConvertTo-Json -Compress }) -join "`n"
-    $out = $lines | & "$Root\bin\VclSpyRemote.exe" --server $Server --hosts 127.0.0.1 --password $Password --request -
+    $out = $lines | & "$Root\bin\DelphiSpyRemote.exe" --server $Server --hosts 127.0.0.1 --password $Password --request -
     return @($out | Where-Object { $_ } | ForEach-Object { $_ | ConvertFrom-Json })
 }
 
 $remoteVariants = @(
-    @{ Dir = '280-x86-server'; Title = 'VclSpy Test 35 x86 static server' },
-    @{ Dir = '280-x64-server-pkg'; Title = 'VclSpy Test 35 x64 packages server' },
-    @{ Dir = '270-x64-server'; Title = 'VclSpy Test 34 x64 static server' }
+    @{ Dir = '280-x86-server'; Title = 'DelphiSpy Test 35 x86 static server' },
+    @{ Dir = '280-x64-server-pkg'; Title = 'DelphiSpy Test 35 x64 packages server' },
+    @{ Dir = '270-x64-server'; Title = 'DelphiSpy Test 34 x64 static server' }
 )
 
 foreach ($v in $remoteVariants) {
     if ($v.Dir -notlike $Only) { continue }
     Write-Host "== $($v.Title) (remote)"
     $password = "pw-$($v.Dir)"
-    $env:VCLSPY_PASSWORD = $password
+    $env:DELPHISPY_PASSWORD = $password
     try { $proc, $form = Start-Target $v.Dir $v.Title }
-    finally { Remove-Item Env:VCLSPY_PASSWORD }
+    finally { Remove-Item Env:DELPHISPY_PASSWORD }
     try {
         $server = "PID $($proc.Id),"
         $ok = Child $form 'TButton' 'OK'
@@ -691,7 +691,7 @@ foreach ($v in $remoteVariants) {
             @{ op = 'pick'; x = -99999; y = -99999 })
         Check 'replies' $r.Count 4
         Check 'forms ok' $r[0].ok $true
-        CheckLike 'forms inspector' $r[0].inspector 'VclSpy.Server in TestTarget.exe*'
+        CheckLike 'forms inspector' $r[0].inspector 'DelphiSpy.Server in TestTarget.exe*'
         Check 'forms pid' $r[0].process.pid $proc.Id
         Check 'forms computer' $r[0].process.computer $env:COMPUTERNAME
         $f = $r[0].forms | Where-Object name -eq 'frmTest'
@@ -733,22 +733,22 @@ foreach ($v in $remoteVariants) {
 }
 
 $remoteFmxVariants = @(
-    @{ Dir = 'fmx-280-x86-server'; Title = 'VclSpy FMX Test 35 x86 static server' },
-    @{ Dir = 'fmx-270-x64-server-pkg'; Title = 'VclSpy FMX Test 34 x64 packages server' }
+    @{ Dir = 'fmx-280-x86-server'; Title = 'DelphiSpy FMX Test 35 x86 static server' },
+    @{ Dir = 'fmx-270-x64-server-pkg'; Title = 'DelphiSpy FMX Test 34 x64 packages server' }
 )
 
 foreach ($v in $remoteFmxVariants) {
     if ($v.Dir -notlike $Only) { continue }
     Write-Host "== $($v.Title) (remote)"
     $password = "pw-$($v.Dir)"
-    $env:VCLSPY_PASSWORD = $password
+    $env:DELPHISPY_PASSWORD = $password
     try { $proc, $form = Start-Target $v.Dir $v.Title 'FmxTestTarget' 'FMTfrmFmxTest' }
-    finally { Remove-Item Env:VCLSPY_PASSWORD }
+    finally { Remove-Item Env:DELPHISPY_PASSWORD }
     try {
         $server = "PID $($proc.Id),"
         # FMX starts the server later than the VCL: wait until it can be found
         for ($i = 0; $i -lt 40; $i++) {
-            $list = & "$Root\bin\VclSpyRemote.exe" --list --hosts 127.0.0.1
+            $list = & "$Root\bin\DelphiSpyRemote.exe" --list --hosts 127.0.0.1
             if ("$list" -like "*$server*") { break }
             Start-Sleep -Milliseconds 250
         }
@@ -756,7 +756,7 @@ foreach ($v in $remoteFmxVariants) {
         CheckLike 'wrong password error' $e[0].error '*refused the password*'
         $r = Remote $server $password @(@{ op = 'forms' })
         Check 'forms ok' $r[0].ok $true
-        CheckLike 'forms inspector' $r[0].inspector 'VclSpy.Server in FmxTestTarget.exe*'
+        CheckLike 'forms inspector' $r[0].inspector 'DelphiSpy.Server in FmxTestTarget.exe*'
         Check 'forms framework' $r[0].process.framework 'FMX'
         Check 'forms computer' $r[0].process.computer $env:COMPUTERNAME
         $f = $r[0].forms | Where-Object name -eq 'frmFmxTest'

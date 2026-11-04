@@ -1,14 +1,14 @@
 unit InjectRunner;
 
 { Runs requests to the inspector on background threads. TInjectRunner starts
-  the VclSpyInject.exe that matches the target's bitness, optionally feeds it
+  the DelphiSpyInject.exe that matches the target's bitness, optionally feeds it
   a request on stdin, and collects the JSON it writes to stdout.
-  TRemoteRunner sends a request to an application that links VclSpy.Server. }
+  TRemoteRunner sends a request to an application that links DelphiSpy.Server. }
 
 interface
 
 uses
-  Winapi.Windows, System.SysUtils, System.Classes, System.Types, VclSpy.RemoteClient;
+  Winapi.Windows, System.SysUtils, System.Classes, System.Types, DelphiSpy.RemoteClient;
 
 type
   // Frees itself. OnDone runs on the main thread; read Output there.
@@ -47,7 +47,7 @@ type
     constructor Create(Client: TRemoteClient; const Request: string; OnDone: TNotifyEvent);
   end;
 
-// Checks that VclSpy can inspect the process that owns Wnd and returns the
+// Checks that DelphiSpy can inspect the process that owns Wnd and returns the
 // full path of the injector to use, or raises with a user-readable reason.
 function InjectorFor(Wnd: HWND): string;
 
@@ -56,7 +56,7 @@ function ErrorJson(const Msg: string): string;
 implementation
 
 uses
-  System.JSON, VclSpy.Protocol;
+  System.JSON, DelphiSpy.Protocol;
 
 {$WARN SYMBOL_PLATFORM OFF}
 
@@ -113,7 +113,7 @@ begin
   if Process = 0 then
     raise Exception.CreateFmt('Cannot open process %d: %s', [Pid, SysErrorMessage(GetLastError)]);
   try
-    // VclSpy.exe is 32-bit: on 64-bit Windows it runs under WOW64 itself
+    // DelphiSpy.exe is 32-bit: on 64-bit Windows it runs under WOW64 itself
     Arch := 'x86';
     if IsWow64Process(GetCurrentProcess, SelfWow) and SelfWow and
       IsWow64Process(Process, TargetWow) and not TargetWow then
@@ -130,14 +130,14 @@ begin
       else
         Elevated := GetLastError = ERROR_ACCESS_DENIED;
       if Elevated then
-        raise Exception.CreateFmt('Process %d runs elevated. Restart VclSpy as administrator ' +
+        raise Exception.CreateFmt('Process %d runs elevated. Restart DelphiSpy as administrator ' +
           'to inspect it.', [Pid]);
     end;
   finally
     CloseHandle(Process);
   end;
 
-  Result := ExtractFilePath(ParamStr(0)) + Arch + '\' + VclSpyInjectExeName;
+  Result := ExtractFilePath(ParamStr(0)) + Arch + '\' + DelphiSpyInjectExeName;
   if not FileExists(Result) then
     raise Exception.CreateFmt('%s is missing.', [Result]);
 end;
@@ -220,7 +220,7 @@ begin
       end;
       FOutput := TEncoding.UTF8.GetString(Bytes.Bytes, 0, Bytes.Size);
       if FOutput = '' then
-        FOutput := ErrorJson(VclSpyInjectExeName + ' produced no output.');
+        FOutput := ErrorJson(DelphiSpyInjectExeName + ' produced no output.');
     finally
       Bytes.Free;
       CloseHandle(ReadPipe);
@@ -233,7 +233,7 @@ begin
     end;
   except
     on E: Exception do
-      FOutput := ErrorJson('Running ' + VclSpyInjectExeName + ' failed: ' + E.Message);
+      FOutput := ErrorJson('Running ' + DelphiSpyInjectExeName + ' failed: ' + E.Message);
   end;
 end;
 
@@ -250,7 +250,7 @@ end;
 procedure TRemoteRunner.Execute;
 begin
   try
-    FOutput := FClient.Request(FRequest, VclSpyRemoteTimeout);
+    FOutput := FClient.Request(FRequest, DelphiSpyRemoteTimeout);
   except
     on E: Exception do
       FOutput := ErrorJson('The request failed: ' + E.Message);

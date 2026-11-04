@@ -1,4 +1,4 @@
-unit VclSpy.Members;
+unit DelphiSpy.Members;
 
 { The properties of the inspected control as a tree: its own properties, the
   properties of the objects that object properties return (Font.Size,
@@ -24,7 +24,7 @@ unit VclSpy.Members;
   for record fields. Public getters that change the object
   (TPicture.Bitmap) are skipped (RegisterSkippedProperty). Running in a
   no-packages inspector, System.Rtti reads the target's type information,
-  which has the inspector's layout (VclSpy.Target).
+  which has the inspector's layout (DelphiSpy.Target).
 
   This unit knows no framework: the framework's units register what is
   special about its classes (lists of items, getters to skip, summaries). }
@@ -32,7 +32,7 @@ unit VclSpy.Members;
 interface
 
 uses
-  System.SysUtils, System.Classes, System.TypInfo, System.Rtti, VclSpy.Properties;
+  System.SysUtils, System.Classes, System.TypInfo, System.Rtti, DelphiSpy.Properties;
 
 type
   TMemberKind = (mkPublished, mkExtra, mkPublic, mkField, mkItem);
@@ -113,7 +113,7 @@ var
 implementation
 
 uses
-  System.Variants, System.Generics.Collections, System.Generics.Defaults, VclSpy.Target;
+  System.Variants, System.Generics.Collections, System.Generics.Defaults, DelphiSpy.Target;
 
 type
   TItemList = record
@@ -576,7 +576,7 @@ begin
     mkPublic:
       begin
         if not IsEditableType(Info) then
-          raise EConvertError.CreateFmt('%s (%s) cannot be edited in VclSpy.', [Name, GetTypeName(Info)]);
+          raise EConvertError.CreateFmt('%s (%s) cannot be edited in DelphiSpy.', [Name, GetTypeName(Info)]);
         if not RttiProp.IsWritable then
           raise EConvertError.CreateFmt('%s is read-only.', [Name]);
         if not CanSetString(RttiProp.PropInfo) then
@@ -598,7 +598,7 @@ begin
     mkField:
       begin
         if not IsEditableType(Info) then
-          raise EConvertError.CreateFmt('%s (%s) cannot be edited in VclSpy.', [Name, GetTypeName(Info)]);
+          raise EConvertError.CreateFmt('%s (%s) cannot be edited in DelphiSpy.', [Name, GetTypeName(Info)]);
         Reason := Rec.ReadOnlyReason;
         if Reason <> '' then
           raise EConvertError.CreateFmt('%s cannot be edited: %s', [Name, Reason]);
@@ -606,7 +606,7 @@ begin
         Rec.Write;
       end;
   else
-    raise EConvertError.CreateFmt('%s (%s) cannot be edited in VclSpy.', [Name, GetTypeName(Info)]);
+    raise EConvertError.CreateFmt('%s (%s) cannot be edited in DelphiSpy.', [Name, GetTypeName(Info)]);
   end;
 end;
 
@@ -862,7 +862,7 @@ begin
       if Obj = nil then
         raise EConvertError.CreateFmt('%s is nil.', [Walked]);
       if not ShowsMembers(Obj) then
-        raise EConvertError.CreateFmt('%s refers to another component, %s: %s. VclSpy doesn''t edit it.',
+        raise EConvertError.CreateFmt('%s refers to another component, %s: %s. DelphiSpy doesn''t edit it.',
           [Walked, TComponent(Obj).Name, Obj.ClassName]);
       Members := ObjectMembers(Obj);
     end

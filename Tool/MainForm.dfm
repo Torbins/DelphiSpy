@@ -1,7 +1,7 @@
 object frmMain: TfrmMain
   Left = 0
   Top = 0
-  Caption = 'VclSpy - Delphi VCL and FireMonkey control inspector'
+  Caption = 'DelphiSpy - Delphi VCL and FireMonkey control inspector'
   ClientHeight = 668
   ClientWidth = 760
   Color = clBtnFace
@@ -93,7 +93,7 @@ object frmMain: TfrmMain
       Top = 58
       Width = 92
       Height = 25
-      Hint = 'Inspect an application on another computer that links VclSpy.Server or VclSpy.FmxServer'
+      Hint = 'Inspect an application on another computer that links DelphiSpy.Server or DelphiSpy.FmxServer'
       Anchors = [akTop, akRight]
       Caption = 'Connect...'
       TabOrder = 4

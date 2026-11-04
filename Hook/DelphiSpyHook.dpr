@@ -1,8 +1,8 @@
-library VclSpyHook;
+library DelphiSpyHook;
 
 { Hook stub that SetWindowsHookEx loads into the target process. It is built
   without runtime packages and without SysUtils, so it can load into any
-  process. On a VclSpy query or request it loads the inspector DLL that
+  process. On a DelphiSpy query or request it loads the inspector DLL that
   matches the target's VCL package version and calls it on the target's GUI
   thread. A target without a VCL package gets a no-packages inspector, the
   one built with the target's Delphi version. FireMonkey forms get the FMX
@@ -11,7 +11,7 @@ library VclSpyHook;
 uses
   Winapi.Windows,
   Winapi.Messages,
-  VclSpy.Protocol in '..\Common\VclSpy.Protocol.pas';
+  DelphiSpy.Protocol in '..\Common\DelphiSpy.Protocol.pas';
 
 var
   QueryMsg, RequestMsg: UINT;
@@ -80,20 +80,20 @@ var
   Res: DWORD_PTR;
 begin
   Json := UTF8String('{"ok":false,"error":"' + JsonEscape(Msg) + '"}');
-  Data.dwData := VclSpyCopyDataMagic;
+  Data.dwData := DelphiSpyCopyDataMagic;
   Data.cbData := Length(Json);
   Data.lpData := PAnsiChar(Json);
   SendMessageTimeout(ReplyWnd, WM_COPYDATA, 0, LPARAM(@Data), SMTO_ABORTIFHUNG,
-    VclSpyReplyTimeout, @Res);
+    DelphiSpyReplyTimeout, @Res);
 end;
 
 function FindLoadedPackage(const Prefix: string): string;
 var
   I: Integer;
 begin
-  for I := Low(VclSpyPackageSuffixes) to High(VclSpyPackageSuffixes) do
-    if GetModuleHandle(PChar(Prefix + VclSpyPackageSuffixes[I] + '.bpl')) <> 0 then
-      Exit(VclSpyPackageSuffixes[I]);
+  for I := Low(DelphiSpyPackageSuffixes) to High(DelphiSpyPackageSuffixes) do
+    if GetModuleHandle(PChar(Prefix + DelphiSpyPackageSuffixes[I] + '.bpl')) <> 0 then
+      Exit(DelphiSpyPackageSuffixes[I]);
   Result := '';
 end;
 
@@ -132,7 +132,7 @@ end;
 // Calls Initialize or Finalize of a no-packages inspector, a package
 procedure CallPackageProc(Lib: HMODULE; const Name: string);
 var
-  Proc: TVclSpyPackageProc;
+  Proc: TDelphiSpyPackageProc;
 begin
   @Proc := GetProcAddress(Lib, PChar(Name));
   if Assigned(Proc) then
@@ -140,7 +140,7 @@ begin
 end;
 
 // For a target without the framework's package: loads the no-packages
-// inspector (Prefix: VclSpyInspectNoPkg or VclSpyInspectFmxNoPkg) of the
+// inspector (Prefix: DelphiSpyInspectNoPkg or DelphiSpyInspectFmxNoPkg) of the
 // target's Delphi version. That is the one an earlier pick loaded, or else
 // the first, newest version first, whose probe accepts the control of Wnd.
 // Returns 0 after sending an error.
@@ -148,16 +148,16 @@ function LoadNoPkgInspector(Wnd, ReplyWnd: HWND; const Prefix, Framework: string
 var
   I: Integer;
   Name, Path, Tried: string;
-  Probe: TVclSpyProbeProc;
-  Active: TVclSpyActiveProc;
+  Probe: TDelphiSpyProbeProc;
+  Active: TDelphiSpyActiveProc;
   Err: DWORD;
 begin
-  for I := Low(VclSpyPackageSuffixes) to High(VclSpyPackageSuffixes) do
+  for I := Low(DelphiSpyPackageSuffixes) to High(DelphiSpyPackageSuffixes) do
   begin
-    Result := GetModuleHandle(PChar(Prefix + VclSpyPackageSuffixes[I] + '.dll'));
+    Result := GetModuleHandle(PChar(Prefix + DelphiSpyPackageSuffixes[I] + '.dll'));
     if Result <> 0 then
     begin
-      @Active := GetProcAddress(Result, PChar(VclSpyActiveExport));
+      @Active := GetProcAddress(Result, PChar(DelphiSpyActiveExport));
       if Assigned(Active) and Active then
         Exit;
       SendError(ReplyWnd, 'The target is closing: its application window is gone, or its last window ' +
@@ -167,9 +167,9 @@ begin
   end;
 
   Tried := '';
-  for I := Low(VclSpyPackageSuffixes) to High(VclSpyPackageSuffixes) do
+  for I := Low(DelphiSpyPackageSuffixes) to High(DelphiSpyPackageSuffixes) do
   begin
-    Name := Prefix + VclSpyPackageSuffixes[I] + '.dll';
+    Name := Prefix + DelphiSpyPackageSuffixes[I] + '.dll';
     Path := ModuleDir + Name;
     if GetFileAttributes(PChar(Path)) = INVALID_FILE_ATTRIBUTES then
       Continue;
@@ -181,13 +181,13 @@ begin
       Continue;
     end;
     // Loading a package doesn't initialize its units
-    CallPackageProc(Result, VclSpyInitializeExport);
-    @Probe := GetProcAddress(Result, PChar(VclSpyProbeExport));
+    CallPackageProc(Result, DelphiSpyInitializeExport);
+    @Probe := GetProcAddress(Result, PChar(DelphiSpyProbeExport));
     // Stays loaded, like the package inspectors
     if Assigned(Probe) and Probe(Wnd) then
       Exit;
     // Another Delphi version. With its own RTL and VCL, it unloads cleanly.
-    CallPackageProc(Result, VclSpyFinalizeExport);
+    CallPackageProc(Result, DelphiSpyFinalizeExport);
     FreeLibrary(Result);
     Tried := Tried + ', ' + Name;
   end;
@@ -198,7 +198,7 @@ begin
   else
     SendError(ReplyWnd, 'The target is not built with Delphi runtime packages, and no no-packages ' +
       'inspector matches its ' + Framework + ' (tried ' + Copy(Tried, 3, MaxInt) + '). It may be built ' +
-      'with a Delphi version VclSpy does not support.');
+      'with a Delphi version DelphiSpy does not support.');
   Result := 0;
 end;
 
@@ -215,15 +215,15 @@ begin
   if IsFmxWindow(Wnd) then
   begin
     Package := 'fmx';
-    Prefix := VclSpyFmxInspectDllPrefix;
-    NoPkgPrefix := VclSpyFmxNoPkgDllPrefix;
+    Prefix := DelphiSpyFmxInspectDllPrefix;
+    NoPkgPrefix := DelphiSpyFmxNoPkgDllPrefix;
     Framework := 'FireMonkey';
   end
   else
   begin
     Package := 'vcl';
-    Prefix := VclSpyInspectDllPrefix;
-    NoPkgPrefix := VclSpyNoPkgDllPrefix;
+    Prefix := DelphiSpyInspectDllPrefix;
+    NoPkgPrefix := DelphiSpyNoPkgDllPrefix;
     Framework := 'VCL';
   end;
   Suffix := FindLoadedPackage(Package);
@@ -262,16 +262,16 @@ begin
   Result := GetProcAddress(Lib, PChar(ExportName));
   if Result = nil then
     // An older inspector stays loaded until the target restarts
-    SendError(ReplyWnd, Path + ' does not export ' + ExportName + '. If VclSpy was updated ' +
+    SendError(ReplyWnd, Path + ' does not export ' + ExportName + '. If DelphiSpy was updated ' +
       'while the target was running, restart the target.');
 end;
 
 procedure HandleQuery(Wnd, ReplyWnd: HWND; Point: LPARAM);
 var
-  Inspect: TVclSpyInspectProc;
+  Inspect: TDelphiSpyInspectProc;
   X, Y: Integer;
 begin
-  @Inspect := InspectorProc(Wnd, ReplyWnd, VclSpyInspectExport);
+  @Inspect := InspectorProc(Wnd, ReplyWnd, DelphiSpyInspectExport);
   if Assigned(Inspect) then
   begin
     UnpackPoint(Point, X, Y);
@@ -282,7 +282,7 @@ end;
 procedure HandleRequest(Wnd, ReplyWnd: HWND; Mapping: THandle);
 var
   View: Pointer;
-  Request: TVclSpyRequestProc;
+  Request: TDelphiSpyRequestProc;
 begin
   try
     View := MapViewOfFile(Mapping, FILE_MAP_READ, 0, 0, 0);
@@ -292,7 +292,7 @@ begin
       Exit;
     end;
     try
-      @Request := InspectorProc(Wnd, ReplyWnd, VclSpyRequestExport);
+      @Request := InspectorProc(Wnd, ReplyWnd, DelphiSpyRequestExport);
       if Assigned(Request) then
         Request(Wnd, PAnsiChar(View), ReplyWnd);
     finally
@@ -311,8 +311,8 @@ begin
   begin
     if QueryMsg = 0 then
     begin
-      QueryMsg := RegisterWindowMessage(VclSpyQueryMessageName);
-      RequestMsg := RegisterWindowMessage(VclSpyRequestMessageName);
+      QueryMsg := RegisterWindowMessage(DelphiSpyQueryMessageName);
+      RequestMsg := RegisterWindowMessage(DelphiSpyRequestMessageName);
     end;
     Msg := PCWPStruct(LParam);
     if (Msg^.wParam <> 0) and ((Msg^.message = QueryMsg) or (Msg^.message = RequestMsg)) then
@@ -329,7 +329,7 @@ begin
 end;
 
 exports
-  CallWndProcHook name VclSpyHookExport;
+  CallWndProcHook name DelphiSpyHookExport;
 
 begin
 end.

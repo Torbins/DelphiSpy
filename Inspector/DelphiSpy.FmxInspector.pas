@@ -1,6 +1,6 @@
-unit VclSpy.FmxInspector;
+unit DelphiSpy.FmxInspector;
 
-{ The inspector of FireMonkey targets, the counterpart of VclSpy.Inspector.
+{ The inspector of FireMonkey targets, the counterpart of DelphiSpy.Inspector.
   It runs inside the target, on the GUI thread of the picked form, and has the
   same exports and requests (get, set, children, forms, pick).
 
@@ -8,7 +8,7 @@ unit VclSpy.FmxInspector;
   platform services, windows and OLE) would be too intrusive for the
   no-packages inspectors, and the package inspectors needn't load fmxNNN.bpl.
   So it reaches the target's FMX objects through their RTTI, and tells their
-  classes by name (VclSpy.Target.AncestorNamed): public properties (Children,
+  classes by name (DelphiSpy.Target.AncestorNamed): public properties (Children,
   Parent, AbsoluteRect), published ones (Visible, Position) and the fields
   of TStyledControl. What it needs of the RTL (TComponent, TBasicAction,
   TStrings) has the layout of the inspector's own.
@@ -25,7 +25,7 @@ unit VclSpy.FmxInspector;
     listed as children; reports mark style objects with "style".
   - Every FmxObject child is listed, also animations and effects.
   - The control's members are all its published and public properties
-    (VclSpy.Members.AllPublicOfControl): FMX has no protected properties
+    (DelphiSpy.Members.AllPublicOfControl): FMX has no protected properties
     worth reaching, and the inspector couldn't reach them without FMX.
 
   The no-packages inspector checks that the target's FMX is the one of its
@@ -37,12 +37,12 @@ interface
 uses
   Winapi.Windows;
 
-procedure VclSpyInspect(Wnd: HWND; X, Y: Integer; ReplyWnd: HWND); stdcall;
-procedure VclSpyRequest(Wnd: HWND; Request: PAnsiChar; ReplyWnd: HWND); stdcall;
+procedure DelphiSpyInspect(Wnd: HWND; X, Y: Integer; ReplyWnd: HWND); stdcall;
+procedure DelphiSpyRequest(Wnd: HWND; Request: PAnsiChar; ReplyWnd: HWND); stdcall;
 // Exported by the no-packages inspectors only
-function VclSpyProbe(Wnd: HWND): BOOL; stdcall;
+function DelphiSpyProbe(Wnd: HWND): BOOL; stdcall;
 
-// The reply of VclSpyRequest as JSON, for VclSpy.FmxServer. Wnd may be 0:
+// The reply of DelphiSpyRequest as JSON, for DelphiSpy.FmxServer. Wnd may be 0:
 // the object is then looked for in every form.
 function RequestReply(Wnd: HWND; const Request: string): string;
 
@@ -51,10 +51,10 @@ implementation
 uses
   System.Types, System.SysUtils, System.Classes, System.TypInfo, System.Rtti, System.UITypes,
   System.UIConsts, System.JSON, System.Generics.Collections,
-  VclSpy.Properties, VclSpy.Members, VclSpy.Target, VclSpy.MemoryManager, VclSpy.Report;
+  DelphiSpy.Properties, DelphiSpy.Members, DelphiSpy.Target, DelphiSpy.MemoryManager, DelphiSpy.Report;
 
 // TCommonCustomForm.InstanceSize of the FMX of this Delphi version. For
-// other versions (when VclSpy.FmxServer links the inspector) it isn't checked.
+// other versions (when DelphiSpy.FmxServer links the inspector) it isn't checked.
 {$IF CompilerVersion = 34}
   {$DEFINE FORM_SIZE_KNOWN}
 const
@@ -534,7 +534,7 @@ begin
   AddInt(Result, 'childCount', ChildCount(Child));
 end;
 
-// Direct children, for VclSpy to browse the parent tree; their addresses
+// Direct children, for DelphiSpy to browse the parent tree; their addresses
 // work in requests. IsStyle: Obj is part of a style, and so are they.
 function ChildrenJson(Obj: TObject; IsStyle: Boolean): TJSONArray;
 var
@@ -669,7 +669,7 @@ begin
     AddStr(Result, 'memoryManager', MemoryManagerText);
 end;
 
-// FormWnd is reported as "window", for VclSpy to send requests to
+// FormWnd is reported as "window", for DelphiSpy to send requests to
 function NewReport(Obj: TObject; FormWnd: HWND): TJSONObject;
 var
   Mapping: TDpiMapping;
@@ -756,7 +756,7 @@ begin
   Result := nil;
 end;
 
-// The target's forms, to browse a target that VclSpy can't drag the finder onto
+// The target's forms, to browse a target that DelphiSpy can't drag the finder onto
 function FormsReply: string;
 var
   Reply, Item: TJSONObject;
@@ -881,7 +881,7 @@ end;
 
 { Exports }
 
-procedure VclSpyInspect(Wnd: HWND; X, Y: Integer; ReplyWnd: HWND); stdcall;
+procedure DelphiSpyInspect(Wnd: HWND; X, Y: Integer; ReplyWnd: HWND); stdcall;
 var
   Json: string;
 begin
@@ -902,7 +902,7 @@ begin
   end;
 end;
 
-procedure VclSpyRequest(Wnd: HWND; Request: PAnsiChar; ReplyWnd: HWND); stdcall;
+procedure DelphiSpyRequest(Wnd: HWND; Request: PAnsiChar; ReplyWnd: HWND); stdcall;
 var
   Json: string;
 begin
@@ -914,7 +914,7 @@ begin
   SendReply(ReplyWnd, Json);
 end;
 
-function VclSpyProbe(Wnd: HWND): BOOL; stdcall;
+function DelphiSpyProbe(Wnd: HWND): BOOL; stdcall;
 var
   Form: TObject;
   FormWnd: HWND;
@@ -928,7 +928,7 @@ begin
   end;
 end;
 
-{ What VclSpy.Properties and VclSpy.Members need to know about FMX }
+{ What DelphiSpy.Properties and DelphiSpy.Members need to know about FMX }
 
 function AlphaColorFromText(const Text: string; out Value: Integer): Boolean;
 var

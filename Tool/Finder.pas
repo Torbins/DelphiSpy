@@ -2,7 +2,7 @@ unit Finder;
 
 { The drag-and-drop window finder (like Spy++'s finder tool) and the red
   frame that highlights the window or control under the cursor. Everything
-  here works in physical screen coordinates (VclSpy is Per-Monitor V2 aware). }
+  here works in physical screen coordinates (DelphiSpy is Per-Monitor V2 aware). }
 
 interface
 

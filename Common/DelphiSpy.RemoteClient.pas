@@ -1,8 +1,8 @@
-unit VclSpy.RemoteClient;
+unit DelphiSpy.RemoteClient;
 
-{ VclSpy's side of VclSpy.Server: finds the applications on the network that
-  link it, connects to one, and sends it requests (see VclSpy.Protocol). All
-  methods block until they are done, so the VclSpy UI calls them on threads of
+{ DelphiSpy's side of DelphiSpy.Server: finds the applications on the network that
+  link it, connects to one, and sends it requests (see DelphiSpy.Protocol). All
+  methods block until they are done, so the DelphiSpy UI calls them on threads of
   their own. The tethering events don't synchronize with the main thread;
   they signal the waiting method instead. }
 
@@ -61,7 +61,7 @@ type
     // A server that the last Discover found. Raises ERemoteError.
     procedure Connect(const Server: TRemoteServer; const Password: string; Timeout: Cardinal);
     procedure Disconnect;
-    // A request as for VclSpyRequest; returns the reply, or an
+    // A request as for DelphiSpyRequest; returns the reply, or an
     // {"ok":false,...} error object
     function Request(const Json: string; Timeout: Cardinal): string;
     property Connected: Boolean read FConnected;
@@ -78,7 +78,7 @@ uses
   System.JSON,
   // The network adapter's implementation, as the IDE adds for TTetheringManager
   IPPeerClient, IPPeerServer,
-  VclSpy.Protocol;
+  DelphiSpy.Protocol;
 
 function RemoteErrorJson(const Msg: string): string;
 var
@@ -127,7 +127,7 @@ begin
   FReplies := TDictionary<string, string>.Create;
   FManager := TTetheringManager.Create(nil);
   FManager.AllowedAdapters := 'Network';
-  FManager.Text := VclSpyClientText;
+  FManager.Text := DelphiSpyClientText;
   FManager.SynchronizeEvents := False;
   FManager.OnEndManagersDiscovery := EndManagersDiscovery;
   FManager.OnEndProfilesDiscovery := EndProfilesDiscovery;
@@ -136,8 +136,8 @@ begin
   FManager.OnAuthErrorFromLocal := AuthError;
   FManager.OnRemoteManagerShutdown := RemoteManagerShutdown;
   FProfile := TTetheringAppProfile.Create(nil);
-  FProfile.Group := VclSpyProfileGroup + '.client';
-  FProfile.Text := VclSpyClientText;
+  FProfile.Group := DelphiSpyProfileGroup + '.client';
+  FProfile.Text := DelphiSpyClientText;
   FProfile.SynchronizeEvents := False;
   FProfile.OnResourceReceived := ResourceReceived;
   FProfile.OnDisconnect := ProfileDisconnected;
@@ -195,9 +195,9 @@ procedure TRemoteClient.ResourceReceived(const Sender: TObject; const AResource:
 var
   Id: string;
 begin
-  if not AResource.Hint.StartsWith(VclSpyReplyDescription) then
+  if not AResource.Hint.StartsWith(DelphiSpyReplyDescription) then
     Exit;
-  Id := AResource.Hint.Substring(Length(VclSpyReplyDescription));
+  Id := AResource.Hint.Substring(Length(DelphiSpyReplyDescription));
   TMonitor.Enter(FReplies);
   try
     FReplies.AddOrSetValue(Id, ResourceText(AResource));
@@ -247,10 +247,10 @@ begin
   TMonitor.Enter(FLock);
   try
     for Info in FFound do
-      if Info.ManagerText.StartsWith(VclSpyServerTextPrefix) then
+      if Info.ManagerText.StartsWith(DelphiSpyServerTextPrefix) then
       begin
         Server.ManagerId := Info.ManagerIdentifier;
-        Server.Description := Info.ManagerText.Substring(Length(VclSpyServerTextPrefix));
+        Server.Description := Info.ManagerText.Substring(Length(DelphiSpyServerTextPrefix));
         // "192.168.1.20$2020"
         Server.Address := Info.ConnectionString.Replace('$', ':');
         Result := Result + [Server];
@@ -320,7 +320,7 @@ begin
     TMonitor.Enter(FLock);
     try
       for Profile in FServerProfiles do
-        if (Profile.ManagerIdentifier = Info.ManagerIdentifier) and (Profile.ProfileGroup = VclSpyProfileGroup) then
+        if (Profile.ManagerIdentifier = Info.ManagerIdentifier) and (Profile.ProfileGroup = DelphiSpyProfileGroup) then
         begin
           FServerProfile := Profile;
           Found := True;
@@ -330,7 +330,7 @@ begin
       TMonitor.Exit(FLock);
     end;
     if not Found then
-      raise ERemoteError.CreateFmt('%s has no VclSpy server profile.', [Server.Caption]);
+      raise ERemoteError.CreateFmt('%s has no DelphiSpy server profile.', [Server.Caption]);
     if not FProfile.Connect(FServerProfile, Timeout) then
       raise ERemoteError.CreateFmt('Cannot connect to %s.', [Server.Caption]);
   except
@@ -373,7 +373,7 @@ var
   Remaining: Int64;
 begin
   if not FConnected then
-    Exit(RemoteErrorJson('Not connected to a VclSpy server.'));
+    Exit(RemoteErrorJson('Not connected to a DelphiSpy server.'));
   Value := TJSONObject.ParseJSONValue(Json);
   try
     if not (Value is TJSONObject) then
@@ -387,7 +387,7 @@ begin
   end;
 
   try
-    if not FProfile.SendLongString(FServerProfile, VclSpyRequestDescription, Text) then
+    if not FProfile.SendLongString(FServerProfile, DelphiSpyRequestDescription, Text) then
       Exit(RemoteErrorJson(Format('Sending the request to %s failed.', [FServer.Caption])));
   except
     on E: Exception do

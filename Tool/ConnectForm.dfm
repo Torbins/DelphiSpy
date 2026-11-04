@@ -35,7 +35,7 @@ object frmConnect: TfrmConnect
       Anchors = [akLeft, akTop, akRight]
       AutoSize = False
       Caption =
-        'Applications that link VclSpy.Server. Computers to search (empt' +
+        'Applications that link DelphiSpy.Server. Computers to search (empt' +
         'y: the local network):'
     end
     object edtHosts: TEdit
@@ -118,7 +118,7 @@ object frmConnect: TfrmConnect
       Top = 10
       Width = 200
       Height = 23
-      Hint = 'VclSpyServerPassword of the application, if it sets one'
+      Hint = 'DelphiSpyServerPassword of the application, if it sets one'
       PasswordChar = '*'
       TabOrder = 0
     end

@@ -1,6 +1,6 @@
-unit VclSpy.MemoryManager;
+unit DelphiSpy.MemoryManager;
 
-{ Makes the no-packages inspectors (VclSpyInspectNoPkgNNN.dll) use the
+{ Makes the no-packages inspectors (DelphiSpyInspectNoPkgNNN.dll) use the
   target's memory manager where they can. Such an inspector has its own RTL,
   so strings that the target's code returns to it, and strings it hands to the
   target's code, cross between two memory managers unless they share one.
@@ -12,20 +12,20 @@ unit VclSpy.MemoryManager;
     ShareMem would.
   - Another module shares its memory manager (SimpleShareMem, FastMM's
     ShareMM): use that one. The exe frees all of its memory when it ends;
-    VclSpy.SelfFinalize finalizes the inspector before that. An inspector
+    DelphiSpy.SelfFinalize finalizes the inspector before that. An inspector
     that couldn't would touch that memory when it is unloaded at the very
     end of the process, so it would use the guard instead.
   - Otherwise keep the inspector's own memory manager, but guard it: blocks
     it allocates carry a mark, and blocks without it, the target's, are never
     freed by it (they leak), only copied when reallocated. The target can
-    still free blocks of the inspector that it keeps; VclSpy.Properties
+    still free blocks of the inspector that it keeps; DelphiSpy.Properties
     avoids handing it any.
 
   The first two need the inspector's own memory manager unused so far; if it
   isn't, because some unit ran before this one, the guard is used.
 
   In the package inspectors this unit does nothing: the rtl package already
-  gives them the target's memory manager. Nor where VclSpy.Server links the
+  gives them the target's memory manager. Nor where DelphiSpy.Server links the
   inspector into the target: it is the target's own memory manager. }
 
 interface
@@ -53,8 +53,8 @@ type
 const
   BorlndMM = 'borlndmm.dll';
   // Exported by the inspectors that finalize themselves while the target's
-  // memory manager still works (VclSpy.SelfFinalize)
-  FinalizesEarlyExport = 'VclSpyFinalizesEarly';
+  // memory manager still works (DelphiSpy.SelfFinalize)
+  FinalizesEarlyExport = 'DelphiSpyFinalizesEarly';
   MEM_COMMIT = $1000;
   PAGE_NOACCESS = $01;
   PAGE_GUARD = $100;
@@ -242,7 +242,7 @@ initialization
   if not SystemInThisModule then
     MemoryManagerMode := mmPackage
   else if not ModuleIsPackage then
-    // An exe or DLL that links the inspector (VclSpy.Server): the target itself
+    // An exe or DLL that links the inspector (DelphiSpy.Server): the target itself
     MemoryManagerMode := mmLinked
   else
   begin

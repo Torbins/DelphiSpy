@@ -1,7 +1,7 @@
 object frmTest: TfrmTest
   Left = 200
   Top = 200
-  Caption = 'VclSpy Test'
+  Caption = 'DelphiSpy Test'
   ClientHeight = 360
   ClientWidth = 460
   Color = clBtnFace

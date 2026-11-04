@@ -1,20 +1,20 @@
-unit VclSpy.Report;
+unit DelphiSpy.Report;
 
 { The parts of a report that don't depend on the framework, shared by the VCL
-  inspector (VclSpy.Inspector) and the FMX inspector (VclSpy.FmxInspector):
+  inspector (DelphiSpy.Inspector) and the FMX inspector (DelphiSpy.FmxInspector):
   JSON helpers, the properties and events of an object, owners, class
-  hierarchy, coordinates and the reply to VclSpy. Runs inside the target,
+  hierarchy, coordinates and the reply to DelphiSpy. Runs inside the target,
   on its GUI thread. }
 
 interface
 
 uses
   Winapi.Windows, System.Types, System.SysUtils, System.Classes, System.TypInfo, System.JSON,
-  VclSpy.Members;
+  DelphiSpy.Members;
 
 type
   // Maps between the target window's logical coordinates and the physical
-  // screen coordinates VclSpy works in (they differ for DPI-unaware targets).
+  // screen coordinates DelphiSpy works in (they differ for DPI-unaware targets).
   TDpiMapping = record
     Logical, Physical: TRect;
     procedure Init(Wnd: HWND);
@@ -54,7 +54,7 @@ function InspectorText: string;
 function SetMember(Ctrl: TObject; Request: TJSONObject; out Changed: TJSONObject): string;
 
 // The deepest window at a physical screen point, disabled ones included
-// (WindowFromPoint skips those), as VclSpy's finder resolves it. With
+// (WindowFromPoint skips those), as DelphiSpy's finder resolves it. With
 // AtCursor, the window at the mouse cursor, whose position Pt returns.
 function WindowAtPhysicalPoint(var Pt: TPoint; AtCursor: Boolean): HWND;
 // Op "pick": the window to report, at the mouse cursor or at "x" and "y" of
@@ -66,15 +66,15 @@ function RequestText(const Request: string): string;
 procedure SendReply(ReplyWnd: HWND; const Json: string);
 
 var
-  // Set by VclSpy.Server, which links the inspector into the target; reports
+  // Set by DelphiSpy.Server, which links the inspector into the target; reports
   // name it instead of the inspector DLL
   LinkedInspectorName: string;
 
 implementation
 
 uses
-  Winapi.Messages, System.Math, System.Generics.Collections, VclSpy.Protocol, VclSpy.Properties, VclSpy.Target,
-  VclSpy.MemoryManager;
+  Winapi.Messages, System.Math, System.Generics.Collections, DelphiSpy.Protocol, DelphiSpy.Properties, DelphiSpy.Target,
+  DelphiSpy.MemoryManager;
 
 type
   TSetThreadDpiAwarenessContext = function(Context: THandle): THandle; stdcall;
@@ -273,7 +273,7 @@ begin
     AddBool(Result, 'truncated', True);
   AddStr(Result, 'scope', Scope);
   AddBool(Result, 'editable', Editable);
-  // Names for VclSpy's editor, once per type
+  // Names for DelphiSpy's editor, once per type
   if Editable and (Types.GetValue(TypeName) = nil) then
   begin
     Values := TypeValuesJson(Info);
@@ -283,7 +283,7 @@ begin
 end;
 
 // A property, and below it, in "properties", the members of the object or
-// record it returns (VclSpy.Members). Expanded holds the objects whose
+// record it returns (DelphiSpy.Members). Expanded holds the objects whose
 // members are listed already: each object's are listed once.
 function MemberJson(const Member: TMember; const Path: string; Depth: Integer; Types: TJSONObject;
   Expanded: TList<TObject>): TJSONObject;
@@ -568,11 +568,11 @@ var
   Res: DWORD_PTR;
 begin
   Bytes := TEncoding.UTF8.GetBytes(Json);
-  Data.dwData := VclSpyCopyDataMagic;
+  Data.dwData := DelphiSpyCopyDataMagic;
   Data.cbData := Length(Bytes);
   Data.lpData := Pointer(Bytes);
   SendMessageTimeout(ReplyWnd, WM_COPYDATA, 0, LPARAM(@Data), SMTO_ABORTIFHUNG,
-    VclSpyReplyTimeout, @Res);
+    DelphiSpyReplyTimeout, @Res);
 end;
 
 end.

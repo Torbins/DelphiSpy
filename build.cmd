@@ -1,6 +1,6 @@
 @echo off
-rem Builds VclSpy and its test targets with the Delphi command-line compilers.
-rem   VclSpyInspect[Fmx][NoPkg]270 and the 270 test targets: Delphi 10.4 (BDS 21.0)
+rem Builds DelphiSpy and its test targets with the Delphi command-line compilers.
+rem   DelphiSpyInspect[Fmx][NoPkg]270 and the 270 test targets: Delphi 10.4 (BDS 21.0)
 rem   everything else:                                  Delphi 11   (BDS 22.0)
 rem Set BDS21 / BDS22 to override the install folders.
 setlocal EnableExtensions
@@ -13,34 +13,34 @@ set "PKG=-LUrtl;vcl"
 rem The FMX inspectors share the rtl package only; the FMX test targets use fmx too
 set "RTLPKG=-LUrtl"
 set "FMXPKG=-LUrtl;fmx"
-rem Test targets that link VclSpy.Server (paths relative to Test)
-set "SERVER=-DVCLSPY_SERVER -U..\Server;..\Inspector;..\Common"
+rem Test targets that link DelphiSpy.Server (paths relative to Test)
+set "SERVER=-DDELPHISPY_SERVER -U..\Server;..\Inspector;..\Common"
 
-echo === Tool\VclSpyManifest.rc
-"%BDS22%\bin\brcc32.exe" -fo"%ROOT%Tool\VclSpyManifest.res" "%ROOT%Tool\VclSpyManifest.rc" >nul || goto :fail
+echo === Tool\DelphiSpyManifest.rc
+"%BDS22%\bin\brcc32.exe" -fo"%ROOT%Tool\DelphiSpyManifest.res" "%ROOT%Tool\DelphiSpyManifest.rc" >nul || goto :fail
 
-call :dcc "%BDS22%" dcc32 Tool\VclSpy.dpr                   "%BIN%"     tool-x86     ""       || goto :fail
-call :dcc "%BDS22%" dcc32 Remote\VclSpyRemote.dpr           "%BIN%"     remote-x86   ""       || goto :fail
-call :dcc "%BDS22%" dcc32 Inject\VclSpyInject.dpr           "%BIN%\x86" inject-x86   ""       || goto :fail
-call :dcc "%BDS22%" dcc64 Inject\VclSpyInject.dpr           "%BIN%\x64" inject-x64   ""       || goto :fail
-call :dcc "%BDS22%" dcc32 Hook\VclSpyHook.dpr               "%BIN%\x86" hook-x86     ""       || goto :fail
-call :dcc "%BDS22%" dcc64 Hook\VclSpyHook.dpr               "%BIN%\x64" hook-x64     ""       || goto :fail
-call :dcc "%BDS22%" dcc32 Inspector\VclSpyInspect280.dpr    "%BIN%\x86" inspect280-x86 "%PKG%" || goto :fail
-call :dcc "%BDS22%" dcc64 Inspector\VclSpyInspect280.dpr    "%BIN%\x64" inspect280-x64 "%PKG%" || goto :fail
-call :dcc "%BDS21%" dcc32 Inspector\VclSpyInspect270.dpr    "%BIN%\x86" inspect270-x86 "%PKG%" || goto :fail
-call :dcc "%BDS21%" dcc64 Inspector\VclSpyInspect270.dpr    "%BIN%\x64" inspect270-x64 "%PKG%" || goto :fail
-call :dcc "%BDS22%" dcc32 Inspector\VclSpyInspectNoPkg280.dpk "%BIN%\x86" inspectnopkg280-x86 "" || goto :fail
-call :dcc "%BDS22%" dcc64 Inspector\VclSpyInspectNoPkg280.dpk "%BIN%\x64" inspectnopkg280-x64 "" || goto :fail
-call :dcc "%BDS21%" dcc32 Inspector\VclSpyInspectNoPkg270.dpk "%BIN%\x86" inspectnopkg270-x86 "" || goto :fail
-call :dcc "%BDS21%" dcc64 Inspector\VclSpyInspectNoPkg270.dpk "%BIN%\x64" inspectnopkg270-x64 "" || goto :fail
-call :dcc "%BDS22%" dcc32 Inspector\VclSpyInspectFmx280.dpr "%BIN%\x86" inspectfmx280-x86 "%RTLPKG%" || goto :fail
-call :dcc "%BDS22%" dcc64 Inspector\VclSpyInspectFmx280.dpr "%BIN%\x64" inspectfmx280-x64 "%RTLPKG%" || goto :fail
-call :dcc "%BDS21%" dcc32 Inspector\VclSpyInspectFmx270.dpr "%BIN%\x86" inspectfmx270-x86 "%RTLPKG%" || goto :fail
-call :dcc "%BDS21%" dcc64 Inspector\VclSpyInspectFmx270.dpr "%BIN%\x64" inspectfmx270-x64 "%RTLPKG%" || goto :fail
-call :dcc "%BDS22%" dcc32 Inspector\VclSpyInspectFmxNoPkg280.dpk "%BIN%\x86" inspectfmxnopkg280-x86 "" || goto :fail
-call :dcc "%BDS22%" dcc64 Inspector\VclSpyInspectFmxNoPkg280.dpk "%BIN%\x64" inspectfmxnopkg280-x64 "" || goto :fail
-call :dcc "%BDS21%" dcc32 Inspector\VclSpyInspectFmxNoPkg270.dpk "%BIN%\x86" inspectfmxnopkg270-x86 "" || goto :fail
-call :dcc "%BDS21%" dcc64 Inspector\VclSpyInspectFmxNoPkg270.dpk "%BIN%\x64" inspectfmxnopkg270-x64 "" || goto :fail
+call :dcc "%BDS22%" dcc32 Tool\DelphiSpy.dpr                   "%BIN%"     tool-x86     ""       || goto :fail
+call :dcc "%BDS22%" dcc32 Remote\DelphiSpyRemote.dpr           "%BIN%"     remote-x86   ""       || goto :fail
+call :dcc "%BDS22%" dcc32 Inject\DelphiSpyInject.dpr           "%BIN%\x86" inject-x86   ""       || goto :fail
+call :dcc "%BDS22%" dcc64 Inject\DelphiSpyInject.dpr           "%BIN%\x64" inject-x64   ""       || goto :fail
+call :dcc "%BDS22%" dcc32 Hook\DelphiSpyHook.dpr               "%BIN%\x86" hook-x86     ""       || goto :fail
+call :dcc "%BDS22%" dcc64 Hook\DelphiSpyHook.dpr               "%BIN%\x64" hook-x64     ""       || goto :fail
+call :dcc "%BDS22%" dcc32 Inspector\DelphiSpyInspect280.dpr    "%BIN%\x86" inspect280-x86 "%PKG%" || goto :fail
+call :dcc "%BDS22%" dcc64 Inspector\DelphiSpyInspect280.dpr    "%BIN%\x64" inspect280-x64 "%PKG%" || goto :fail
+call :dcc "%BDS21%" dcc32 Inspector\DelphiSpyInspect270.dpr    "%BIN%\x86" inspect270-x86 "%PKG%" || goto :fail
+call :dcc "%BDS21%" dcc64 Inspector\DelphiSpyInspect270.dpr    "%BIN%\x64" inspect270-x64 "%PKG%" || goto :fail
+call :dcc "%BDS22%" dcc32 Inspector\DelphiSpyInspectNoPkg280.dpk "%BIN%\x86" inspectnopkg280-x86 "" || goto :fail
+call :dcc "%BDS22%" dcc64 Inspector\DelphiSpyInspectNoPkg280.dpk "%BIN%\x64" inspectnopkg280-x64 "" || goto :fail
+call :dcc "%BDS21%" dcc32 Inspector\DelphiSpyInspectNoPkg270.dpk "%BIN%\x86" inspectnopkg270-x86 "" || goto :fail
+call :dcc "%BDS21%" dcc64 Inspector\DelphiSpyInspectNoPkg270.dpk "%BIN%\x64" inspectnopkg270-x64 "" || goto :fail
+call :dcc "%BDS22%" dcc32 Inspector\DelphiSpyInspectFmx280.dpr "%BIN%\x86" inspectfmx280-x86 "%RTLPKG%" || goto :fail
+call :dcc "%BDS22%" dcc64 Inspector\DelphiSpyInspectFmx280.dpr "%BIN%\x64" inspectfmx280-x64 "%RTLPKG%" || goto :fail
+call :dcc "%BDS21%" dcc32 Inspector\DelphiSpyInspectFmx270.dpr "%BIN%\x86" inspectfmx270-x86 "%RTLPKG%" || goto :fail
+call :dcc "%BDS21%" dcc64 Inspector\DelphiSpyInspectFmx270.dpr "%BIN%\x64" inspectfmx270-x64 "%RTLPKG%" || goto :fail
+call :dcc "%BDS22%" dcc32 Inspector\DelphiSpyInspectFmxNoPkg280.dpk "%BIN%\x86" inspectfmxnopkg280-x86 "" || goto :fail
+call :dcc "%BDS22%" dcc64 Inspector\DelphiSpyInspectFmxNoPkg280.dpk "%BIN%\x64" inspectfmxnopkg280-x64 "" || goto :fail
+call :dcc "%BDS21%" dcc32 Inspector\DelphiSpyInspectFmxNoPkg270.dpk "%BIN%\x86" inspectfmxnopkg270-x86 "" || goto :fail
+call :dcc "%BDS21%" dcc64 Inspector\DelphiSpyInspectFmxNoPkg270.dpk "%BIN%\x64" inspectfmxnopkg270-x64 "" || goto :fail
 
 if /i "%~1"=="notests" goto :done
 call :dcc "%BDS21%" dcc32 Test\TestTarget.dpr "%TESTBIN%\270-x86"       test-270-x86       "%PKG%" || goto :fail
@@ -56,11 +56,11 @@ copy /y "%BDS22%\bin\borlndmm.dll" "%TESTBIN%\280-x86-sharemem\" >nul || goto :f
 call :dcc "%BDS22%" dcc64 Test\TestTarget.dpr "%TESTBIN%\280-x64-sharemem" test-280-x64-sharemem "-DSHAREMEM" || goto :fail
 copy /y "%BDS22%\bin64\borlndmm.dll" "%TESTBIN%\280-x64-sharemem\" >nul || goto :fail
 call :dcc "%BDS22%" dcc32 Test\TestTarget.dpr "%TESTBIN%\280-x86-simplesharemem" test-280-x86-simplesharemem "-DSIMPLESHAREMEM" || goto :fail
-rem Linking VclSpy.Server, for inspecting over the network: without and with runtime packages
+rem Linking DelphiSpy.Server, for inspecting over the network: without and with runtime packages
 call :dcc "%BDS22%" dcc32 Test\TestTarget.dpr "%TESTBIN%\280-x86-server"     test-280-x86-server     "%SERVER%"        || goto :fail
 call :dcc "%BDS22%" dcc64 Test\TestTarget.dpr "%TESTBIN%\280-x64-server-pkg" test-280-x64-server-pkg "%PKG% %SERVER%" || goto :fail
 call :dcc "%BDS21%" dcc64 Test\TestTarget.dpr "%TESTBIN%\270-x64-server"     test-270-x64-server     "%SERVER%"        || goto :fail
-rem FireMonkey: with and without packages, with ShareMem and SimpleShareMem, and linking VclSpy.FmxServer
+rem FireMonkey: with and without packages, with ShareMem and SimpleShareMem, and linking DelphiSpy.FmxServer
 call :dcc "%BDS22%" dcc32 Test\FmxTestTarget.dpr "%TESTBIN%\fmx-280-x86"       test-fmx-280-x86       "%FMXPKG%" || goto :fail
 call :dcc "%BDS21%" dcc64 Test\FmxTestTarget.dpr "%TESTBIN%\fmx-270-x64"       test-fmx-270-x64       "%FMXPKG%" || goto :fail
 call :dcc "%BDS22%" dcc64 Test\FmxTestTarget.dpr "%TESTBIN%\fmx-280-x64-nopkg" test-fmx-280-x64-nopkg ""          || goto :fail

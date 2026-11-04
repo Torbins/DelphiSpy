@@ -5,7 +5,7 @@ interface
 uses
   Winapi.Windows, Winapi.Messages, System.SysUtils, System.Classes, System.Types, System.JSON,
   Vcl.Controls, Vcl.Forms, Vcl.StdCtrls, Vcl.ExtCtrls, Vcl.ComCtrls, Vcl.Graphics, Vcl.Menus,
-  Finder, InjectRunner, VclSpy.RemoteClient;
+  Finder, InjectRunner, DelphiSpy.RemoteClient;
 
 type
   TfrmMain = class(TForm)
@@ -85,7 +85,7 @@ type
     FFinder: TFinderTool;
     FFrame: THighlightFrame;
     FRunner: TRequestRunner;
-    // Connects to applications that link VclSpy.Server; created on first use
+    // Connects to applications that link DelphiSpy.Server; created on first use
     FClient: TRemoteClient;
     // The TRemoteServer.ManagerId of the server FReport came from, '' for a
     // local target. Requests about the report go there.
@@ -390,7 +390,7 @@ begin
   pgcDetails.ActivePage := tabProperties;
   ClearDetails;
 
-  // VclSpy.exe --inspect <hwnd> <x> <y>: inspect without dragging (scripting, tests)
+  // DelphiSpy.exe --inspect <hwnd> <x> <y>: inspect without dragging (scripting, tests)
   if (ParamCount >= 4) and SameText(ParamStr(1), '--inspect') then
     TThread.ForceQueue(nil,
       procedure
@@ -876,7 +876,7 @@ begin
     TEncoding.UTF8.GetBytes(Request.ToJSON), OnDone);
 end;
 
-// Sends Request to the connected VclSpy.Server
+// Sends Request to the connected DelphiSpy.Server
 function TfrmMain.StartRemoteRequest(Request: TJSONObject; OnDone: TNotifyEvent): Boolean;
 begin
   Result := False;

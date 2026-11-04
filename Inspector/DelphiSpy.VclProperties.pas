@@ -1,7 +1,7 @@
-unit VclSpy.VclProperties;
+unit DelphiSpy.VclProperties;
 
 { What the VCL inspector knows about VCL classes, registered with
-  VclSpy.Properties and VclSpy.Members:
+  DelphiSpy.Properties and DelphiSpy.Members:
 
   - The TControl and TWinControl properties that are declared public or
     protected, so RTTI doesn't list them unless a class republishes them;
@@ -18,7 +18,7 @@ implementation
 uses
   System.SysUtils, System.Classes, System.TypInfo, System.UITypes,
   Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.Menus, Vcl.ComCtrls,
-  VclSpy.Properties, VclSpy.Members;
+  DelphiSpy.Properties, DelphiSpy.Members;
 
 type
   TControlAccess = class(TControl);

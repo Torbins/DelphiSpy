@@ -1,9 +1,9 @@
-unit VclSpy.Injector;
+unit DelphiSpy.Injector;
 
-{ Gets VclSpyHook.dll into the process that owns a window and asks it to
+{ Gets DelphiSpyHook.dll into the process that owns a window and asks it to
   inspect the control at a screen point, or to carry out a JSON request
   (read or change a property). The caller must have the same bitness as the
-  target. That is why VclSpyInject.exe ships as x86 and x64. }
+  target. That is why DelphiSpyInject.exe ships as x86 and x64. }
 
 interface
 
@@ -23,12 +23,12 @@ implementation
 
 uses
   Winapi.Messages, System.SysUtils, System.JSON,
-  VclSpy.Protocol;
+  DelphiSpy.Protocol;
 
 {$WARN SYMBOL_PLATFORM OFF}
 
 const
-  ReplyWindowClass = 'VclSpyInjectReply';
+  ReplyWindowClass = 'DelphiSpyInjectReply';
   MSGFLT_ALLOW = 1;
   PROCESS_QUERY_LIMITED_INFORMATION = $1000;
 
@@ -61,7 +61,7 @@ begin
   if Msg = WM_COPYDATA then
   begin
     Data := PCopyDataStruct(LParam);
-    if Data^.dwData = VclSpyCopyDataMagic then
+    if Data^.dwData = DelphiSpyCopyDataMagic then
     begin
       SetString(Reply, PAnsiChar(Data^.lpData), Data^.cbData);
       ReplyReceived := True;
@@ -106,9 +106,9 @@ begin
   end;
   if not Result then
     if TargetWow then
-      Message := 'The target is a 32-bit process; use x86\' + VclSpyInjectExeName + '.'
+      Message := 'The target is a 32-bit process; use x86\' + DelphiSpyInjectExeName + '.'
     else
-      Message := 'The target is a 64-bit process; use x64\' + VclSpyInjectExeName + '.';
+      Message := 'The target is a 64-bit process; use x64\' + DelphiSpyInjectExeName + '.';
 end;
 
 // Checks that Wnd belongs to another process of our bitness
@@ -141,14 +141,14 @@ var
   Value: LPARAM;
   Path, Error: string;
 begin
-  Path := ExtractFilePath(ParamStr(0)) + VclSpyHookDllName;
+  Path := ExtractFilePath(ParamStr(0)) + DelphiSpyHookDllName;
   HookLib := LoadLibrary(PChar(Path));
   if HookLib = 0 then
     Exit(ErrorJson(Format('Cannot load %s: %s', [Path, SysErrorMessage(GetLastError)])));
   try
-    HookProc := GetProcAddress(HookLib, VclSpyHookExport);
+    HookProc := GetProcAddress(HookLib, DelphiSpyHookExport);
     if HookProc = nil then
-      Exit(ErrorJson(Format('%s does not export %s.', [Path, VclSpyHookExport])));
+      Exit(ErrorJson(Format('%s does not export %s.', [Path, DelphiSpyHookExport])));
 
     ReplyWnd := CreateReplyWindow;
     try
@@ -170,12 +170,12 @@ begin
               Exit(ErrorJson(Format('The target did not respond within %d ms (is it busy or hung?).', [Timeout])))
             else if Err = ERROR_ACCESS_DENIED then
               Exit(ErrorJson('Access denied sending to the target. It probably runs elevated; ' +
-                'start VclSpy as administrator.'))
+                'start DelphiSpy as administrator.'))
             else
               Exit(ErrorJson('Sending the query failed: ' + SysErrorMessage(Err)));
         end;
         if not ReplyReceived then
-          Exit(ErrorJson('No reply from the target. It may run elevated (start VclSpy as ' +
+          Exit(ErrorJson('No reply from the target. It may run elevated (start DelphiSpy as ' +
             'administrator), or security software may block the hook DLL.'));
         Result := Reply;
       finally
@@ -199,7 +199,7 @@ begin
   Msg := CheckTarget(Wnd, Pid, Tid);
   if Msg <> '' then
     Exit(ErrorJson(Msg));
-  Result := Exchange(Wnd, Tid, RegisterWindowMessage(VclSpyQueryMessageName),
+  Result := Exchange(Wnd, Tid, RegisterWindowMessage(DelphiSpyQueryMessageName),
     function(ReplyWnd: HWND; out Value: LPARAM; out Error: string): Boolean
     begin
       Value := PackPoint(X, Y);
@@ -239,7 +239,7 @@ begin
     if Process = 0 then
       Exit(ErrorJson(Format('Cannot open process %d: %s', [Pid, SysErrorMessage(GetLastError)])));
     try
-      Result := Exchange(Wnd, Tid, RegisterWindowMessage(VclSpyRequestMessageName),
+      Result := Exchange(Wnd, Tid, RegisterWindowMessage(DelphiSpyRequestMessageName),
         function(ReplyWnd: HWND; out Value: LPARAM; out Error: string): Boolean
         var
           Remote: THandle;

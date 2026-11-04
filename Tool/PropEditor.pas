@@ -61,7 +61,7 @@ begin
   Dialog := TfrmPropEditor.Create(Owner);
   try
     Dialog.PopupMode := pmExplicit;
-    Dialog.PopupParent := Owner; // stays above a "stay on top" VclSpy
+    Dialog.PopupParent := Owner; // stays above a "stay on top" DelphiSpy
     Dialog.Setup(Info, Text, Error);
     Result := Dialog.ShowModal = mrOk;
     if Result then
@@ -155,7 +155,7 @@ begin
 
   if Info.Truncated then
   begin
-    lblNote.Caption := 'VclSpy only read the first characters of this value. OK replaces all of it.';
+    lblNote.Caption := 'DelphiSpy only read the first characters of this value. OK replaces all of it.';
     lblNote.Font.Color := clRed;
   end;
   lblNote.Hint := lblNote.Caption;

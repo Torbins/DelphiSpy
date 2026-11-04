@@ -1,30 +1,30 @@
-unit VclSpy.Inspector;
+unit DelphiSpy.Inspector;
 
 { Runs inside the target process, on the GUI thread that owns the picked
   window. The package inspector DLLs are linked with the rtl and vcl runtime
   packages only, so the VCL objects seen here are the target's own: Owner,
   Parent and RTTI can be walked directly. The no-packages inspectors link the
   VCL statically and see the target's objects as foreign ones of the same
-  layout; this unit finds them through their windows, and VclSpy.Target
+  layout; this unit finds them through their windows, and DelphiSpy.Target
   compares their classes by name, so this unit uses IsKindOf instead of "is".
 
-  Requests (VclSpyRequest) are JSON objects with "op" and "address", the
+  Requests (DelphiSpyRequest) are JSON objects with "op" and "address", the
   control.address of an earlier report (or of a parent or child listed in
   one). Op "get" re-reads the control; op "set" also takes "property", a
   property's path (Caption, Font.Size, BoundsRect.Left, Panels[0].Width),
   and "value" (text, as reports show values). Both reply with a fresh report
   of the control; "set" adds "changed" with the old and new value.
-  VclSpy.Members and VclSpy.Properties decide what can be edited. Op "children" replies with
+  DelphiSpy.Members and DelphiSpy.Properties decide what can be edited. Op "children" replies with
   just "address" and "children", the control's direct children.
 
   Two ops need no address: "forms" replies with "forms", the target's forms
   (parentless windowed controls), and "pick" reports the control at the
   mouse cursor, or at "x" and "y" (physical screen coordinates) if given.
-  VclSpy uses them for targets it connects to over the network (VclSpy.Server),
+  DelphiSpy uses them for targets it connects to over the network (DelphiSpy.Server),
   whose windows it can't drag the finder onto.
 
-  VclSpy.Report builds what doesn't depend on the VCL; VclSpy.VclProperties
-  registers what VclSpy.Properties and VclSpy.Members need to know about VCL
+  DelphiSpy.Report builds what doesn't depend on the VCL; DelphiSpy.VclProperties
+  registers what DelphiSpy.Properties and DelphiSpy.Members need to know about VCL
   classes. }
 
 interface
@@ -32,12 +32,12 @@ interface
 uses
   Winapi.Windows;
 
-procedure VclSpyInspect(Wnd: HWND; X, Y: Integer; ReplyWnd: HWND); stdcall;
-procedure VclSpyRequest(Wnd: HWND; Request: PAnsiChar; ReplyWnd: HWND); stdcall;
+procedure DelphiSpyInspect(Wnd: HWND; X, Y: Integer; ReplyWnd: HWND); stdcall;
+procedure DelphiSpyRequest(Wnd: HWND; Request: PAnsiChar; ReplyWnd: HWND); stdcall;
 // Exported by the no-packages inspectors only
-function VclSpyProbe(Wnd: HWND): BOOL; stdcall;
+function DelphiSpyProbe(Wnd: HWND): BOOL; stdcall;
 
-// The reply of VclSpyRequest as JSON, for VclSpy.Server. Wnd may be 0: the
+// The reply of DelphiSpyRequest as JSON, for DelphiSpy.Server. Wnd may be 0: the
 // control is then looked for in every form.
 function RequestReply(Wnd: HWND; const Request: string): string;
 
@@ -47,8 +47,8 @@ uses
   Winapi.Messages, System.Types, System.SysUtils, System.Classes, System.TypInfo,
   System.JSON, System.Generics.Collections,
   Vcl.Controls, Vcl.Forms,
-  VclSpy.Protocol, VclSpy.Properties, VclSpy.Members, VclSpy.Target, VclSpy.MemoryManager,
-  VclSpy.Report, VclSpy.VclProperties;
+  DelphiSpy.Protocol, DelphiSpy.Properties, DelphiSpy.Members, DelphiSpy.Target, DelphiSpy.MemoryManager,
+  DelphiSpy.Report, DelphiSpy.VclProperties;
 
 type
   TControlAccess = class(TControl);
@@ -205,7 +205,7 @@ begin
     Result := 0;
 end;
 
-// Direct children, for VclSpy to browse the parent tree; their addresses
+// Direct children, for DelphiSpy to browse the parent tree; their addresses
 // work in requests
 function ChildrenJson(C: TControl): TJSONArray;
 var
@@ -344,7 +344,7 @@ begin
 end;
 
 // Wnd is reported as "window": a window on the thread that owns Ctrl, for
-// VclSpy to send requests to
+// DelphiSpy to send requests to
 function NewReport(Ctrl: TControl; Wnd: HWND): TJSONObject;
 var
   Mapping: TDpiMapping;
@@ -459,7 +459,7 @@ begin
   Result := Fallback;
 end;
 
-// The target's forms, to browse a target that VclSpy can't drag the finder onto
+// The target's forms, to browse a target that DelphiSpy can't drag the finder onto
 function FormsReply: string;
 var
   Reply, Item: TJSONObject;
@@ -576,7 +576,7 @@ begin
   end;
 end;
 
-procedure VclSpyInspect(Wnd: HWND; X, Y: Integer; ReplyWnd: HWND); stdcall;
+procedure DelphiSpyInspect(Wnd: HWND; X, Y: Integer; ReplyWnd: HWND); stdcall;
 var
   Json: string;
 begin
@@ -597,7 +597,7 @@ begin
   end;
 end;
 
-procedure VclSpyRequest(Wnd: HWND; Request: PAnsiChar; ReplyWnd: HWND); stdcall;
+procedure DelphiSpyRequest(Wnd: HWND; Request: PAnsiChar; ReplyWnd: HWND); stdcall;
 var
   Json: string;
 begin
@@ -609,7 +609,7 @@ begin
   SendReply(ReplyWnd, Json);
 end;
 
-function VclSpyProbe(Wnd: HWND): BOOL; stdcall;
+function DelphiSpyProbe(Wnd: HWND): BOOL; stdcall;
 var
   Ctrl: TWinControl;
   Error: string;

@@ -49,10 +49,10 @@ begin
 {$IFDEF SIMPLESHAREMEM}
   Linking := Linking + ' SimpleShareMem';
 {$ENDIF}
-{$IFDEF VCLSPY_SERVER}
+{$IFDEF DELPHISPY_SERVER}
   Linking := Linking + ' server';
 {$ENDIF}
-  Caption := Format('VclSpy FMX Test %d %s %s', [Trunc(CompilerVersion), Bitness, Linking]);
+  Caption := Format('DelphiSpy FMX Test %d %s %s', [Trunc(CompilerVersion), Bitness, Linking]);
 
   fraSample := TfraFmxSample.Create(Self);
   fraSample.Name := 'fraSample';

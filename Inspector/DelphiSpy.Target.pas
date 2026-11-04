@@ -1,15 +1,15 @@
-unit VclSpy.Target;
+unit DelphiSpy.Target;
 
 { Tells the target's objects apart, for every kind of inspector DLL.
 
-  The package inspectors (VclSpyInspectNNN.dll for the VCL, and
-  VclSpyInspectFmxNNN.dll for FireMonkey) share the target's rtl package:
+  The package inspectors (DelphiSpyInspectNNN.dll for the VCL, and
+  DelphiSpyInspectFmxNNN.dll for FireMonkey) share the target's rtl package:
   the target's objects are instances of the inspector's own RTL classes, so
   "is" works for TComponent, TCollection, TStrings... The VCL inspectors share
   the vcl package too.
 
-  The no-packages inspectors (VclSpyInspectNoPkgNNN.dll and
-  VclSpyInspectFmxNoPkgNNN.dll) link the RTL (and the VCL) statically, as the
+  The no-packages inspectors (DelphiSpyInspectNoPkgNNN.dll and
+  DelphiSpyInspectFmxNoPkgNNN.dll) link the RTL (and the VCL) statically, as the
   target does. Built by the same Delphi version, the target's objects have the
   layout of the inspector's classes, so their fields, RTTI, virtual methods
   and static methods work, but their classes are the target's own. So classes
@@ -18,7 +18,7 @@ unit VclSpy.Target;
   The FMX inspectors don't link FireMonkey at all: they reach the target's FMX
   objects through RTTI, and their classes by name (AncestorNamed).
 
-  VclSpy.Server links the inspector into the target itself, which then works
+  DelphiSpy.Server links the inspector into the target itself, which then works
   like a package inspector: the RTL it sees is its own. }
 
 interface
@@ -61,7 +61,7 @@ function TargetMayKeepOurMemory: Boolean;
 implementation
 
 uses
-  System.SysUtils, System.Classes, System.TypInfo, VclSpy.MemoryManager;
+  System.SysUtils, System.Classes, System.TypInfo, DelphiSpy.MemoryManager;
 
 var
   FOwnRtl: Boolean;

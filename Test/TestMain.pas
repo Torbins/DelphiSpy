@@ -54,10 +54,10 @@ begin
 {$IFDEF SIMPLESHAREMEM}
   Linking := Linking + ' SimpleShareMem';
 {$ENDIF}
-{$IFDEF VCLSPY_SERVER}
+{$IFDEF DELPHISPY_SERVER}
   Linking := Linking + ' server';
 {$ENDIF}
-  Caption := Format('VclSpy Test %d %s %s', [Trunc(CompilerVersion), Bitness, Linking]);
+  Caption := Format('DelphiSpy Test %d %s %s', [Trunc(CompilerVersion), Bitness, Linking]);
 
   // The DFM keeps these items in binary form
   Item := lvItems.Items.Add;

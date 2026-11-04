@@ -1,6 +1,6 @@
-unit VclSpy.SelfFinalize;
+unit DelphiSpy.SelfFinalize;
 
-{ Part of the no-packages inspectors only (VclSpy.NoPkg, VclSpy.FmxNoPkg).
+{ Part of the no-packages inspectors only (DelphiSpy.NoPkg, DelphiSpy.FmxNoPkg).
   They are packages that contain the RTL themselves (no requires clause),
   built with the extension dll. Unlike a DLL's, the units of a package are
   not initialized and finalized by its DllMain, but by its exports
@@ -29,7 +29,7 @@ unit VclSpy.SelfFinalize;
     closed so, from the taskbar.
     This is a guess: an application that hides all its windows (to the
     notification area) would seem to end. So the windows are watched only
-    when the inspector shares the exe's memory manager (VclSpy.MemoryManager,
+    when the inspector shares the exe's memory manager (DelphiSpy.MemoryManager,
     mmShared), the one case that needs it. Otherwise not finalizing is
     harmless: the inspector touches only memory of its own, or of
     borlndmm.dll, when it is unloaded.
@@ -40,7 +40,7 @@ unit VclSpy.SelfFinalize;
   happen if a window is visible again by then.
 
   After Finalize the inspector stays loaded but must not be called any more;
-  VclSpyActive tells the hook stub. The window procedure goes on forwarding
+  DelphiSpyActive tells the hook stub. The window procedure goes on forwarding
   for windows that were subclassed again since: it uses nothing of the RTL,
   and the list of windows is static. }
 
@@ -49,11 +49,11 @@ interface
 uses
   Winapi.Windows;
 
-function VclSpyActive: BOOL; stdcall;
-// Tells VclSpy.MemoryManager that it may use the memory manager that the exe
+function DelphiSpyActive: BOOL; stdcall;
+// Tells DelphiSpy.MemoryManager that it may use the memory manager that the exe
 // shares (SimpleShareMem): the inspector finalizes itself before the exe
 // frees it
-procedure VclSpyFinalizesEarly; stdcall;
+procedure DelphiSpyFinalizesEarly; stdcall;
 
 // Around each call of the inspector's exports
 procedure EnterCall;
@@ -62,7 +62,7 @@ procedure LeaveCall;
 implementation
 
 uses
-  Winapi.Messages, VclSpy.Protocol, VclSpy.MemoryManager;
+  Winapi.Messages, DelphiSpy.Protocol, DelphiSpy.MemoryManager;
 
 type
   TWatched = record
@@ -89,12 +89,12 @@ var
   Watched: array[0..MaxWatched - 1] of TWatched;
   WatchedCount: Integer;
 
-function VclSpyActive: BOOL; stdcall;
+function DelphiSpyActive: BOOL; stdcall;
 begin
   Result := not Finalized;
 end;
 
-procedure VclSpyFinalizesEarly; stdcall;
+procedure DelphiSpyFinalizesEarly; stdcall;
 begin
 end;
 
@@ -217,18 +217,18 @@ end;
 
 procedure FinalizeNow;
 var
-  Finalize: TVclSpyPackageProc;
+  Finalize: TDelphiSpyPackageProc;
 begin
   Finalized := True;
   Pending := False;
   UnwatchAll;
-  @Finalize := GetProcAddress(HInstance, PChar(VclSpyFinalizeExport));
+  @Finalize := GetProcAddress(HInstance, PChar(DelphiSpyFinalizeExport));
   try
     Finalize;
     if AppWnd <> 0 then
-      OutputDebugString('VclSpy: the inspector finalized itself with the application window')
+      OutputDebugString('DelphiSpy: the inspector finalized itself with the application window')
     else
-      OutputDebugString('VclSpy: the inspector finalized itself with the last visible window');
+      OutputDebugString('DelphiSpy: the inspector finalized itself with the last visible window');
   except
     // Not into the target's message dispatch
   end;

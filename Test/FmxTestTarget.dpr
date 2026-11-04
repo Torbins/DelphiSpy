@@ -1,9 +1,9 @@
 program FmxTestTarget;
 
-{ FireMonkey target app for testing VclSpy. build.cmd builds it with runtime
+{ FireMonkey target app for testing DelphiSpy. build.cmd builds it with runtime
   packages rtl;fmx for Delphi 10.4 and 11, and without packages: plain, with
   ShareMem (SHAREMEM) and with SimpleShareMem (SIMPLESHAREMEM). With
-  VCLSPY_SERVER it links VclSpy.FmxServer, for inspecting it over the
+  DELPHISPY_SERVER it links DelphiSpy.FmxServer, for inspecting it over the
   network. }
 
 uses
@@ -13,8 +13,8 @@ uses
 {$IFDEF SIMPLESHAREMEM}
   SimpleShareMem,
 {$ENDIF}
-{$IFDEF VCLSPY_SERVER}
-  VclSpy.FmxServer,
+{$IFDEF DELPHISPY_SERVER}
+  DelphiSpy.FmxServer,
 {$ENDIF}
   System.StartUpCopy,
   FMX.Forms,

@@ -1,6 +1,6 @@
 unit ConnectForm;
 
-{ Finds the applications on the network that link VclSpy.Server, and
+{ Finds the applications on the network that link DelphiSpy.Server, and
   connects to one. Searching and connecting run on threads of their own;
   meanwhile the dialog stays open. }
 
@@ -8,7 +8,7 @@ interface
 
 uses
   Winapi.Windows, System.SysUtils, System.Classes, Vcl.Controls, Vcl.Forms, Vcl.StdCtrls,
-  Vcl.ExtCtrls, Vcl.ComCtrls, VclSpy.RemoteClient;
+  Vcl.ExtCtrls, Vcl.ComCtrls, DelphiSpy.RemoteClient;
 
 type
   TfrmConnect = class(TForm)
@@ -45,7 +45,7 @@ implementation
 {$R *.dfm}
 
 uses
-  System.UITypes, Vcl.Graphics, VclSpy.Protocol;
+  System.UITypes, Vcl.Graphics, DelphiSpy.Protocol;
 
 const
   DiscoveryTimeout = 3000;
@@ -163,10 +163,10 @@ begin
         lvServers.Items[0].Selected := True;
         lvServers.Items[0].Focused := True;
         lvServers.SetFocus;
-        lblStatus.Caption := Format('Found %d application(s) with VclSpy.Server.', [Length(FServers)]);
+        lblStatus.Caption := Format('Found %d application(s) with DelphiSpy.Server.', [Length(FServers)]);
       end
       else
-        lblStatus.Caption := 'Found no application with VclSpy.Server. Name its computer above if it ' +
+        lblStatus.Caption := 'Found no application with DelphiSpy.Server. Name its computer above if it ' +
           'is in another network.';
       UpdateButtons;
     end);
@@ -184,7 +184,7 @@ begin
   Run('Connecting to ' + Server.Caption + ' ...',
     procedure
     begin
-      FClient.Connect(Server, Password, VclSpyRemoteTimeout);
+      FClient.Connect(Server, Password, DelphiSpyRemoteTimeout);
     end,
     procedure(Error: string)
     begin

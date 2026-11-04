@@ -1,8 +1,8 @@
-unit VclSpy.ServerCore;
+unit DelphiSpy.ServerCore;
 
-{ The App Tethering server of VclSpy.Server (VCL) and VclSpy.FmxServer
+{ The App Tethering server of DelphiSpy.Server (VCL) and DelphiSpy.FmxServer
   (FireMonkey), which link it with their inspector. Applications use one of
-  those units, not this one; see VclSpy.Server for how.
+  those units, not this one; see DelphiSpy.Server for how.
 
   App Tethering uses UDP and TCP ports 2020-2039 (and TCP 2040-2110), which
   the firewall must let through. Anyone who reaches the application and
@@ -10,8 +10,8 @@ unit VclSpy.ServerCore;
   not encrypted: keep the server out of release builds (IFDEF DEBUG).
 
   Requests run on the GUI thread, from the main message loop, as requests
-  through VclSpy's hook do. Each reply is sent from a thread of its own (the
-  server connects back to VclSpy for it), so a client that doesn't take its
+  through DelphiSpy's hook do. Each reply is sent from a thread of its own (the
+  server connects back to DelphiSpy for it), so a client that doesn't take its
   reply holds up no other. }
 
 interface
@@ -31,7 +31,7 @@ procedure StartServer;
 procedure StopServer;
 function ServerRunning: Boolean;
 
-// From the initialization of VclSpy.Server or VclSpy.FmxServer: requests go
+// From the initialization of DelphiSpy.Server or DelphiSpy.FmxServer: requests go
 // to Reply, and the server starts once the main message loop runs
 procedure InstallServer(Reply: TRequestReplyFunc);
 
@@ -42,7 +42,7 @@ uses
   System.Tether.Manager, System.Tether.AppProfile,
   // The network adapter's implementation, as the IDE adds for TTetheringManager
   IPPeerClient, IPPeerServer,
-  VclSpy.Protocol, VclSpy.Report;
+  DelphiSpy.Protocol, DelphiSpy.Report;
 
 type
   TServer = class
@@ -93,10 +93,10 @@ begin
   Description := Format('%s, PID %d, %s', [ExtractFileName(ParamStr(0)), GetCurrentProcessId, ComputerName]);
   FManager := TTetheringManager.Create(nil);
   FManager.AllowedAdapters := 'Network';
-  FManager.Text := VclSpyServerTextPrefix + Description;
+  FManager.Text := DelphiSpyServerTextPrefix + Description;
   FManager.Password := ServerPassword;
   FProfile := TTetheringAppProfile.Create(nil);
-  FProfile.Group := VclSpyProfileGroup;
+  FProfile.Group := DelphiSpyProfileGroup;
   FProfile.Text := Description;
   FProfile.OnResourceReceived := ResourceReceived;
   // Starts listening
@@ -150,7 +150,7 @@ var
   Wnd: HWND;
   Pid: DWORD;
 begin
-  if AResource.Hint <> VclSpyRequestDescription then
+  if AResource.Hint <> DelphiSpyRequestDescription then
     Exit;
   try
     Text := ResourceText(AResource);
@@ -160,7 +160,7 @@ begin
         Exit;
       if not FindClient(Value.GetValue<string>('replyTo', ''), Client) then
         Exit; // nobody to reply to
-      Description := VclSpyReplyDescription + Value.GetValue<string>('id', '');
+      Description := DelphiSpyReplyDescription + Value.GetValue<string>('id', '');
       // The window.hwnd of an earlier report, where the inspector looks for
       // the control first
       Wnd := HWND(Value.GetValue<Int64>('hwnd', 0));
@@ -214,23 +214,23 @@ end;
 
 procedure StartWhenEnabled;
 begin
-  if GetEnvironmentVariable('VCLSPY_SERVER') = '0' then
+  if GetEnvironmentVariable('DELPHISPY_SERVER') = '0' then
     ServerEnabled := False;
   if ServerPassword = '' then
-    ServerPassword := GetEnvironmentVariable('VCLSPY_PASSWORD');
+    ServerPassword := GetEnvironmentVariable('DELPHISPY_PASSWORD');
   if ServerEnabled then
     try
       StartServer;
     except
       on E: Exception do
-        OutputDebugString(PChar('VclSpy: the server did not start: ' + E.Message));
+        OutputDebugString(PChar('DelphiSpy: the server did not start: ' + E.Message));
     end;
 end;
 
 procedure InstallServer(Reply: TRequestReplyFunc);
 begin
   RequestReply := Reply;
-  LinkedInspectorName := 'VclSpy.Server';
+  LinkedInspectorName := 'DelphiSpy.Server';
   // Once the main message loop runs: the .dpr can change the settings first
   TThread.ForceQueue(nil, StartWhenEnabled);
 end;

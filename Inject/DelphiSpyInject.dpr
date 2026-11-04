@@ -1,13 +1,13 @@
-program VclSpyInject;
+program DelphiSpyInject;
 
-{ Command-line injector, built as x86 and x64. VclSpy.exe starts the build
+{ Command-line injector, built as x86 and x64. DelphiSpy.exe starts the build
   that matches the target's bitness and reads the JSON reply from stdout.
 
-  Usage: VclSpyInject.exe --hwnd <handle> --x <screenX> --y <screenY> [--timeout <ms>]
-         VclSpyInject.exe --hwnd <handle> --request <file | -> [--timeout <ms>]
+  Usage: DelphiSpyInject.exe --hwnd <handle> --x <screenX> --y <screenY> [--timeout <ms>]
+         DelphiSpyInject.exe --hwnd <handle> --request <file | -> [--timeout <ms>]
   Coordinates are physical screen pixels. --request sends a UTF-8 JSON
-  request read from a file or, with "-", from stdin; see VclSpyRequest in
-  Inspector\VclSpy.Inspector.pas. Exit code 0 means "ok":true. }
+  request read from a file or, with "-", from stdin; see DelphiSpyRequest in
+  Inspector\DelphiSpy.Inspector.pas. Exit code 0 means "ok":true. }
 
 {$APPTYPE CONSOLE}
 
@@ -15,8 +15,8 @@ uses
   Winapi.Windows,
   System.SysUtils,
   System.IOUtils,
-  VclSpy.Protocol in '..\Common\VclSpy.Protocol.pas',
-  VclSpy.Injector in '..\Common\VclSpy.Injector.pas';
+  DelphiSpy.Protocol in '..\Common\DelphiSpy.Protocol.pas',
+  DelphiSpy.Injector in '..\Common\DelphiSpy.Injector.pas';
 
 // Looks for "--name value"
 function FindStrArg(const Name: string; out Value: string): Boolean;
@@ -47,7 +47,7 @@ begin
   if not FindArg(Name, Result) then
     raise EArgumentException.CreateFmt('Missing --%s. Usage: %s --hwnd <handle> --x <x> --y <y> ' +
       '[--timeout <ms>], or %0:s --hwnd <handle> --request <file | -> [--timeout <ms>]',
-      [Name, VclSpyInjectExeName]);
+      [Name, DelphiSpyInjectExeName]);
 end;
 
 function OptionalArg(const Name: string; Default: Int64): Int64;
@@ -86,10 +86,10 @@ begin
   try
     if FindStrArg('request', RequestSource) then
       Output := InjectAndRequest(HWND(RequiredArg('hwnd')), ReadRequest(RequestSource),
-        OptionalArg('timeout', VclSpyReplyTimeout))
+        OptionalArg('timeout', DelphiSpyReplyTimeout))
     else
       Output := InjectAndQuery(HWND(RequiredArg('hwnd')), RequiredArg('x'), RequiredArg('y'),
-        OptionalArg('timeout', VclSpyReplyTimeout));
+        OptionalArg('timeout', DelphiSpyReplyTimeout));
   except
     on E: Exception do
       Output := ErrorJson(E.Message);
