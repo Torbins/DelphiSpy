@@ -453,7 +453,7 @@ procedure TfrmMain.EditProperty(Prop: TJSONObject; const Text, Error: string);
 var
   Info: TPropEditInfo;
   NewText: string;
-  Request: TJSONObject;
+  Request, Types: TJSONObject;
 begin
   if (Prop = nil) or not Prop.GetValue<Boolean>('editable', False) or (FRunner <> nil) then
     Exit;
@@ -462,7 +462,12 @@ begin
   Info.Kind := JStr(Prop, 'kind');
   Info.Scope := JStr(Prop, 'scope');
   Info.Value := JStr(Prop, 'value');
-  Info.Values := JArr(JObj(JObj(FReport, 'control'), 'types'), Info.TypeName);
+  // By exact name: nested types are named like "TCustomButton.TButtonStyle",
+  // which a path lookup (JArr) would split at the dot
+  Info.Values := nil;
+  Types := JObj(JObj(FReport, 'control'), 'types');
+  if (Types <> nil) and (Types.GetValue(Info.TypeName) is TJSONArray) then
+    Info.Values := TJSONArray(Types.GetValue(Info.TypeName));
   Info.Truncated := Prop.GetValue<Boolean>('truncated', False) and (Text = Info.Value);
   NewText := Text;
   if not PropEditor.EditProperty(Self, Info, NewText, Error) then

@@ -179,6 +179,12 @@ foreach ($v in $variants) {
         $s = SetProp $v.Arch $s 'Enabled' 'false'
         Check 'set Enabled' (Prop $s 'Enabled').value 'False'
         $s = SetProp $v.Arch $s 'Enabled' 'True'
+        # A nested type: its name has a dot
+        Check 'Style type' (Prop $s 'Style').type 'TCustomButton.TButtonStyle'
+        Check 'Style values' ($s.control.types.'TCustomButton.TButtonStyle' -join ',') 'bsPushButton,bsCommandLink,bsSplitButton'
+        $s = SetProp $v.Arch $s 'Style' 'bsSplitButton'
+        Check 'set nested enum Style' (Prop $s 'Style').value 'bsSplitButton'
+        $s = SetProp $v.Arch $s 'Style' 'bsPushButton'
 
         $e = SetProp $v.Arch $s 'Width' 'abc'
         Check 'bad integer ok' $e.ok $false
