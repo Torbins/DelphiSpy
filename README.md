@@ -10,6 +10,7 @@ Shown for the picked control:
 - Owner path (`frmMain.fraHeader.btnSave`), parent path, and the owning form with its unit
 - Published properties, the `TControl`/`TWinControl` properties the class doesn't publish (`Caption`, `Color`, `Visible`, `TabOrder`...), and **event handlers**, e.g. `OnClick = TfrmMain.btnSaveClick`. The handler is reported for the class that declares it (a base form, when forms inherit), with its unit.
 - Bound action and its `OnExecute` handler, class hierarchy, raw JSON, and a history of picks
+- **Parents**: the control tree of the form, unfolded down to the picked control, with all children of each parent on the way. Unfold any control to list its children (read from the target on demand). Select a control to inspect it instead.
 
 Graphic controls (`TLabel`, `TSpeedButton`, `TImage`...) and disabled controls are found too. Delphi 10.4 (270) and 11 (280) targets are supported, both 32- and 64-bit.
 
@@ -69,6 +70,12 @@ Requests take `control.address` and `window.hwnd` from an earlier report. Values
 ```bat
 echo {"op":"set","address":"$02A41B20","property":"Caption","value":"Save all"} | bin\x86\VclSpyInject.exe --hwnd 1715004 --request -
 echo {"op":"get","address":"$02A41B20"} | bin\x86\VclSpyInject.exe --hwnd 1715004 --request -
+```
+
+Each entry of `control.parents`, and of the `children` lists in a report, has an `address` that works in requests too. `children` lists the direct children of the control and of each parent, with `childCount`. Op `children` returns just those, for any control:
+
+```bat
+echo {"op":"children","address":"$02A41B20"} | bin\x86\VclSpyInject.exe --hwnd 1715004 --request -
 ```
 
 `--request <file>` reads the request from a UTF-8 file instead. A `set` reply adds `"changed": {"property", "oldValue", "newValue"}`. Each property in a report has `kind`, `scope` and `editable`, and `control.types` lists the names of the editable enumeration, set, color and cursor types.

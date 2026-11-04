@@ -373,10 +373,15 @@ object frmMain: TfrmMain
         Top = 0
         Width = 752
         Height = 299
+        Hint = 'Unfold a control to list its children. Select one to inspect it.'
         Align = alClient
+        HideSelection = False
         Indent = 19
         ReadOnly = True
         TabOrder = 0
+        OnChange = tvParentsChange
+        OnCreateNodeClass = tvParentsCreateNodeClass
+        OnExpanding = tvParentsExpanding
       end
     end
     object tabOwners: TTabSheet
@@ -452,6 +457,13 @@ object frmMain: TfrmMain
     Interval = 1500
     OnTimer = tmrFlashTimer
     Left = 704
+    Top = 540
+  end
+  object tmrSelect: TTimer
+    Enabled = False
+    Interval = 300
+    OnTimer = tmrSelectTimer
+    Left = 640
     Top = 540
   end
 end

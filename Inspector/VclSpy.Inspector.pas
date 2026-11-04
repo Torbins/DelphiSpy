@@ -6,10 +6,12 @@ unit VclSpy.Inspector;
   and Owner, Parent and RTTI can be walked directly.
 
   Requests (VclSpyRequest) are JSON objects with "op" and "address", the
-  control.address of an earlier report. Op "get" re-reads the control; op
-  "set" also takes "property" and "value" (text, as reports show values).
-  Both reply with a fresh report of the control; "set" adds "changed" with
-  the old and new value. VclSpy.Properties decides what can be edited. }
+  control.address of an earlier report (or of a parent or child listed in
+  one). Op "get" re-reads the control; op "set" also takes "property" and
+  "value" (text, as reports show values). Both reply with a fresh report of
+  the control; "set" adds "changed" with the old and new value.
+  VclSpy.Properties decides what can be edited. Op "children" replies with
+  just "address" and "children", the control's direct children. }
 
 interface
 
@@ -437,6 +439,42 @@ begin
   end;
 end;
 
+function AddressText(C: TControl): string;
+begin
+  Result := Format('$%p', [Pointer(C)]);
+end;
+
+function ChildCount(C: TControl): Integer;
+begin
+  if C is TWinControl then
+    Result := TWinControl(C).ControlCount
+  else
+    Result := 0;
+end;
+
+// Direct children, for VclSpy to browse the parent tree; their addresses
+// work in requests
+function ChildrenJson(C: TControl): TJSONArray;
+var
+  Child: TControl;
+  Item: TJSONObject;
+  I: Integer;
+begin
+  Result := TJSONArray.Create;
+  for I := 0 to ChildCount(C) - 1 do
+  begin
+    Child := TWinControl(C).Controls[I];
+    Item := TJSONObject.Create;
+    AddStr(Item, 'name', Child.Name);
+    AddStr(Item, 'className', Child.ClassName);
+    AddStr(Item, 'address', AddressText(Child));
+    AddBool(Item, 'visible', Child.Visible);
+    AddBool(Item, 'enabled', Child.Enabled);
+    AddInt(Item, 'childCount', ChildCount(Child));
+    Result.AddElement(Item);
+  end;
+end;
+
 function ParentsJson(C: TControl): TJSONArray;
 var
   Item: TJSONObject;
@@ -449,10 +487,12 @@ begin
     AddStr(Item, 'name', C.Name);
     AddStr(Item, 'className', C.ClassName);
     AddStr(Item, 'kind', ComponentKind(C));
+    AddStr(Item, 'address', AddressText(C));
     AddBool(Item, 'visible', C.Visible);
     AddBool(Item, 'enabled', C.Enabled);
     if TWinControl(C).HandleAllocated then
       AddInt(Item, 'hwnd', TWinControl(C).Handle);
+    Item.AddPair('children', ChildrenJson(C));
     Result.AddElement(Item);
     C := C.Parent;
   end;
@@ -506,7 +546,7 @@ begin
   AddStr(Result, 'unitName', Ctrl.UnitName);
   AddStr(Result, 'module', ModulePath(FindClassHInstance(Ctrl.ClassType)));
   // Identifies the control in requests
-  AddStr(Result, 'address', Format('$%p', [Pointer(Ctrl)]));
+  AddStr(Result, 'address', AddressText(Ctrl));
   AddStr(Result, 'path', ComponentPath(Ctrl));
   AddStr(Result, 'parentPath', ParentPath(Ctrl));
   AddStr(Result, 'text', Shorten(TControlAccess(Ctrl).Text));
@@ -541,6 +581,7 @@ begin
 
   Result.AddPair('owners', OwnersJson(Ctrl));
   Result.AddPair('parents', ParentsJson(Ctrl));
+  Result.AddPair('children', ChildrenJson(Ctrl));
   Result.AddPair('classHierarchy', ClassHierarchyJson(Ctrl.ClassType));
   AddProperties(Result, Ctrl);
 end;
@@ -719,14 +760,28 @@ begin
       Exit(ErrorReport('The request is not a JSON object.'));
     Request := TJSONObject(Value);
     Op := Request.GetValue<string>('op', '');
-    if not SameText(Op, 'get') and not SameText(Op, 'set') then
-      Exit(ErrorReport(Format('Unknown request op "%s"; use "get" or "set".', [Op])));
+    if not SameText(Op, 'get') and not SameText(Op, 'set') and not SameText(Op, 'children') then
+      Exit(ErrorReport(Format('Unknown request op "%s"; use "get", "set" or "children".', [Op])));
     if not TryStrToUInt64(Request.GetValue<string>('address', ''), Address) then
       Exit(ErrorReport('The request needs "address", the control.address of a report.'));
 
     Ctrl := FindLiveControl(Pointer(NativeUInt(Address)), Wnd);
     if Ctrl = nil then
       Exit(ErrorReport('The control no longer exists (it may have been destroyed). Pick it again.'));
+
+    if SameText(Op, 'children') then
+    begin
+      Report := TJSONObject.Create;
+      try
+        AddBool(Report, 'ok', True);
+        AddStr(Report, 'address', AddressText(Ctrl));
+        Report.AddPair('children', ChildrenJson(Ctrl));
+        Result := Report.ToJSON;
+      finally
+        Report.Free;
+      end;
+      Exit;
+    end;
 
     if SameText(Op, 'set') then
     begin

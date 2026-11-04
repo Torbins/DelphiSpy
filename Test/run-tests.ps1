@@ -63,9 +63,10 @@ function Inspect($Arch, [IntPtr]$Wnd) {
     return ($out -join '') | ConvertFrom-Json
 }
 
-# Sends a get/set request for the control of an earlier report, through stdin
+# Sends a request through stdin, for the control of an earlier report unless
+# $Body has another address
 function Request($Arch, $Report, [hashtable]$Body) {
-    $Body.address = $Report.control.address
+    if (-not $Body.ContainsKey('address')) { $Body.address = $Report.control.address }
     $out = ($Body | ConvertTo-Json -Compress) |
         & "$Root\bin\$Arch\VclSpyInject.exe" --hwnd $Report.window.hwnd --request -
     return ($out -join '') | ConvertFrom-Json
@@ -132,6 +133,20 @@ foreach ($v in $variants) {
         Check 'speed button parent path' $r.control.parentPath 'frmTest.pnlHost.fraSample.pnlGoHost.sbtnGo'
         Check 'speed button OnClick' ($r.control.events | Where-Object name -eq 'OnClick').handler 'TfraSample.sbtnGoClick'
         Check 'frame owner kind' $r.control.owners[0].kind 'frame'
+
+        # Browsing the parent tree
+        Check 'speed button children' @($r.control.children).Count 0
+        Check 'parent children' (($r.control.parents[0].children | ForEach-Object name) -join ',') 'sbtnGo'
+        Check 'frame children' (($r.control.parents[1].children | ForEach-Object name) -join ',') 'pnlGoHost,edtFrame'
+        $c = Request $v.Arch $r @{ op = 'children'; address = $r.control.parents[1].address }
+        Check 'children ok' $c.ok $true
+        Check 'children address' $c.address $r.control.parents[1].address
+        Check 'children names' (($c.children | ForEach-Object name) -join ',') 'pnlGoHost,edtFrame'
+        Check 'children childCount' ($c.children | Where-Object name -eq 'pnlGoHost').childCount 1
+        $g = Request $v.Arch $r @{ op = 'get'; address = $r.control.parents[2].address }
+        Check 'get parent by address' $g.control.name 'pnlHost'
+        $e = Request $v.Arch $r @{ op = 'children'; address = '$1' }
+        CheckLike 'children stale address error' $e.error '*no longer exists*'
 
         $combo = Child $form 'TComboBox' $null
         $r = Inspect $v.Arch (Child $combo 'Edit' $null)

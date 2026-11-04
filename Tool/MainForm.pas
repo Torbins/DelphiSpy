@@ -54,6 +54,7 @@ type
     lbHistory: TListBox;
     sbStatus: TStatusBar;
     tmrFlash: TTimer;
+    tmrSelect: TTimer;
     procedure FormCreate(Sender: TObject);
     procedure FormDestroy(Sender: TObject);
     procedure chkStayOnTopClick(Sender: TObject);
@@ -70,6 +71,10 @@ type
     procedure lvPropertiesCustomDrawItem(Sender: TCustomListView; Item: TListItem;
       State: TCustomDrawState; var DefaultDraw: Boolean);
     procedure FormKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+    procedure tvParentsCreateNodeClass(Sender: TCustomTreeView; var NodeClass: TTreeNodeClass);
+    procedure tvParentsExpanding(Sender: TObject; Node: TTreeNode; var AllowExpansion: Boolean);
+    procedure tvParentsChange(Sender: TObject; Node: TTreeNode);
+    procedure tmrSelectTimer(Sender: TObject);
   private
     FFinder: TFinderTool;
     FFrame: THighlightFrame;
@@ -80,13 +85,17 @@ type
     // The edit in flight, to reopen the editor with it if the target refuses it
     FEditName, FEditText: string;
     FSelectedName: string; // reselected when the property list is filled again
+    FFillingParents: Boolean; // tvParents selection changes are not the user's
+    FExpandAddress: string; // the control whose children are being requested
     procedure FinderPickMove(Sender: TObject; Wnd: HWND; const ScreenPt: TPoint);
     procedure FinderPickDone(Sender: TObject; Wnd: HWND; const ScreenPt: TPoint);
     procedure FinderPickCancel(Sender: TObject);
     procedure RunnerDone(Sender: TObject);
     procedure RequestDone(Sender: TObject);
+    procedure ChildrenDone(Sender: TObject);
+    procedure SelectDone(Sender: TObject);
     procedure StartInspection(Wnd: HWND; const ScreenPt: TPoint);
-    function StartRequest(Request: TJSONObject): Boolean;
+    function StartRequest(Request: TJSONObject; OnDone: TNotifyEvent): Boolean;
     function ReportOk: Boolean;
     function SelectedProperty: TJSONObject;
     function FindProperty(const Name: string): TJSONObject;
@@ -181,6 +190,72 @@ begin
   if Result = '' then
     Result := '<unnamed>';
   Result := Result + ': ' + JStr(Obj, 'className');
+end;
+
+function ControlFlags(Obj: TJSONObject): string;
+begin
+  Result := '';
+  if not Obj.GetValue<Boolean>('visible', True) then
+    Result := Result + '  [hidden]';
+  if not Obj.GetValue<Boolean>('enabled', True) then
+    Result := Result + '  [disabled]';
+end;
+
+// The reply to a request, or nil with the reason in Error
+function ParseReply(const Json: string; out Error: string): TJSONObject;
+var
+  Value: TJSONValue;
+begin
+  Result := nil;
+  Value := TJSONObject.ParseJSONValue(Json);
+  if not (Value is TJSONObject) then
+    Error := 'Unexpected output from the injector: ' + Json
+  else if not TJSONObject(Value).GetValue<Boolean>('ok', False) then
+    Error := JStr(TJSONObject(Value), 'error')
+  else
+  begin
+    Error := '';
+    Exit(TJSONObject(Value));
+  end;
+  Value.Free;
+end;
+
+type
+  // A control in tvParents. Its children are added when it is first unfolded.
+  TControlNode = class(TTreeNode)
+  public
+    Address: string;
+    Loaded: Boolean; // children added
+  end;
+
+function AddControlNode(Tree: TTreeView; Parent: TTreeNode; Obj: TJSONObject): TControlNode;
+begin
+  Result := Tree.Items.AddChild(Parent, NameOrClass(Obj) + ControlFlags(Obj)) as TControlNode;
+  Result.Address := JStr(Obj, 'address');
+  Result.HasChildren := Obj.GetValue<Integer>('childCount', 0) > 0;
+end;
+
+procedure AddChildNodes(Tree: TTreeView; Node: TControlNode; Children: TJSONArray);
+var
+  Element: TJSONValue;
+begin
+  if Children <> nil then
+    for Element in Children do
+      AddControlNode(Tree, Node, Element as TJSONObject);
+  Node.Loaded := True;
+  Node.HasChildren := Node.Count > 0;
+end;
+
+function FindChildNode(Node: TTreeNode; const Address: string): TControlNode;
+begin
+  Node := Node.getFirstChild;
+  while Node <> nil do
+  begin
+    if TControlNode(Node).Address = Address then
+      Exit(TControlNode(Node));
+    Node := Node.getNextSibling;
+  end;
+  Result := nil;
 end;
 
 // Each caption becomes a child of the one before it, outermost first
@@ -395,7 +470,12 @@ begin
   edtText.Text := '';
   lvProperties.Items.Clear;
   lvEvents.Items.Clear;
-  tvParents.Items.Clear;
+  FFillingParents := True;
+  try
+    tvParents.Items.Clear;
+  finally
+    FFillingParents := False;
+  end;
   tvOwners.Items.Clear;
   tvClasses.Items.Clear;
   UpdatePropertyButtons;
@@ -508,7 +588,7 @@ begin
     Request.AddPair('op', 'set');
     Request.AddPair('property', Info.Name);
     Request.AddPair('value', NewText);
-    if StartRequest(Request) then
+    if StartRequest(Request, RequestDone) then
     begin
       FEditName := Info.Name;
       FEditText := NewText;
@@ -518,7 +598,8 @@ begin
   end;
 end;
 
-function TfrmMain.StartRequest(Request: TJSONObject): Boolean;
+// Request goes to the reported control, unless it names another "address"
+function TfrmMain.StartRequest(Request: TJSONObject; OnDone: TNotifyEvent): Boolean;
 var
   Wnd: HWND;
   Injector: string;
@@ -542,17 +623,17 @@ begin
     end;
   end;
   Result := True;
-  Request.AddPair('address', JStr(FReport, 'control.address'));
+  if Request.GetValue('address') = nil then
+    Request.AddPair('address', JStr(FReport, 'control.address'));
   ShowInfo('Sending to ' + DescribeWindow(Wnd) + ' ...');
   Screen.Cursor := crHourGlass;
   FRunner := TInjectRunner.Create(Format('"%s" --hwnd %d --request -', [Injector, NativeUInt(Wnd)]),
-    TEncoding.UTF8.GetBytes(Request.ToJSON), RequestDone);
+    TEncoding.UTF8.GetBytes(Request.ToJSON), OnDone);
 end;
 
 procedure TfrmMain.RequestDone(Sender: TObject);
 var
   Json, Error, Name, Text: string;
-  Value: TJSONValue;
   Changed: TJSONObject;
 begin
   Screen.Cursor := crDefault;
@@ -563,29 +644,19 @@ begin
   FEditName := '';
   FEditText := '';
 
-  Value := TJSONObject.ParseJSONValue(Json);
-  try
-    if not (Value is TJSONObject) then
-      Error := 'Unexpected output from the injector: ' + Json
-    else if not TJSONObject(Value).GetValue<Boolean>('ok', False) then
-      Error := JStr(TJSONObject(Value), 'error')
-    else
-      Error := '';
-    if Error <> '' then
-    begin
-      // Keep showing the last good report
-      ShowError(Error);
-      if Name <> '' then
-        // Not from inside this OnTerminate handler: the runner thread waits for it
-        TThread.ForceQueue(nil,
-          procedure
-          begin
-            EditProperty(FindProperty(Name), Text, Error);
-          end);
-      Exit;
-    end;
-  finally
-    Value.Free;
+  ParseReply(Json, Error).Free;
+  if Error <> '' then
+  begin
+    // Keep showing the last good report
+    ShowError(Error);
+    if Name <> '' then
+      // Not from inside this OnTerminate handler: the runner thread waits for it
+      TThread.ForceQueue(nil,
+        procedure
+        begin
+          EditProperty(FindProperty(Name), Text, Error);
+        end);
+    Exit;
   end;
 
   ShowReport(Json, False);
@@ -595,6 +666,56 @@ begin
       JStr(Changed, 'property'), JStr(Changed, 'oldValue'), JStr(Changed, 'newValue')]))
   else
     ShowInfo('Refreshed ' + JStr(FReport, 'control.path') + ' at ' + TimeToStr(Time));
+end;
+
+procedure TfrmMain.ChildrenDone(Sender: TObject);
+var
+  Address, Error: string;
+  Reply: TJSONObject;
+  Node: TTreeNode;
+begin
+  Screen.Cursor := crDefault;
+  FRunner := nil;
+  Address := FExpandAddress;
+  FExpandAddress := '';
+  Reply := ParseReply(TInjectRunner(Sender).Output, Error);
+  try
+    if Reply = nil then
+    begin
+      ShowError(Error);
+      Exit;
+    end;
+    // By address: the tree may have been filled again meanwhile (a history click)
+    Node := tvParents.Items.GetFirstNode;
+    while (Node <> nil) and ((TControlNode(Node).Address <> Address) or TControlNode(Node).Loaded) do
+      Node := Node.GetNext;
+    if Node = nil then
+      Exit;
+    tvParents.Items.BeginUpdate;
+    try
+      AddChildNodes(tvParents, TControlNode(Node), JArr(Reply, 'children'));
+    finally
+      tvParents.Items.EndUpdate;
+    end;
+    Node.Expand(False);
+    ShowInfo(Format('%s: %d children', [Node.Text, Node.Count]));
+  finally
+    Reply.Free;
+  end;
+end;
+
+procedure TfrmMain.SelectDone(Sender: TObject);
+var
+  Json, Error: string;
+begin
+  Screen.Cursor := crDefault;
+  FRunner := nil;
+  Json := TInjectRunner(Sender).Output;
+  ParseReply(Json, Error).Free;
+  if Error <> '' then
+    ShowError(Error) // keep showing the last good report
+  else
+    ShowReport(Json, True);
 end;
 
 procedure TfrmMain.FillEvents(Control: TJSONObject);
@@ -632,31 +753,47 @@ begin
   tabEvents.Caption := Format('Events (%d)', [lvEvents.Items.Count]);
 end;
 
+// The chain down to the control is unfolded, listing every child on the way.
+// The rest, the control included, is unfolded on demand.
 procedure TfrmMain.FillParents(Control: TJSONObject);
-
-  function Flags(Obj: TJSONObject): string;
-  begin
-    Result := '';
-    if not Obj.GetValue<Boolean>('visible', True) then
-      Result := Result + '  [hidden]';
-    if not Obj.GetValue<Boolean>('enabled', True) then
-      Result := Result + '  [disabled]';
-  end;
-
 var
-  Captions: TArray<string>;
   List: TJSONArray;
-  Obj: TJSONObject;
+  Next: TJSONObject;
+  Node, Found: TControlNode;
   I: Integer;
 begin
   List := JArr(Control, 'parents');
-  if List <> nil then
-    for I := List.Count - 1 downto 0 do
+  FFillingParents := True;
+  tvParents.Items.BeginUpdate;
+  try
+    tvParents.Items.Clear;
+    if (List = nil) or (List.Count = 0) then
+      Node := AddControlNode(tvParents, nil, Control)
+    else
     begin
-      Obj := List.Items[I] as TJSONObject;
-      Captions := Captions + [NameOrClass(Obj) + Flags(Obj)];
+      Node := AddControlNode(tvParents, nil, List.Items[List.Count - 1] as TJSONObject);
+      for I := List.Count - 1 downto 0 do
+      begin
+        if I > 0 then
+          Next := List.Items[I - 1] as TJSONObject
+        else
+          Next := Control;
+        AddChildNodes(tvParents, Node, JArr(List.Items[I] as TJSONObject, 'children'));
+        Found := FindChildNode(Node, JStr(Next, 'address'));
+        if Found = nil then
+          Found := AddControlNode(tvParents, Node, Next);
+        Node.Expand(False);
+        Node := Found;
+      end;
     end;
-  FillChain(tvParents, Captions + ['> ' + NameOrClass(Control) + Flags(Control)]);
+    AddChildNodes(tvParents, Node, JArr(Control, 'children'));
+    Node.Text := '> ' + Node.Text;
+    tvParents.Selected := Node;
+  finally
+    tvParents.Items.EndUpdate;
+    FFillingParents := False;
+  end;
+  Node.MakeVisible;
 end;
 
 procedure TfrmMain.FillOwners(Control: TJSONObject);
@@ -755,7 +892,7 @@ begin
   Request := TJSONObject.Create;
   try
     Request.AddPair('op', 'get');
-    StartRequest(Request);
+    StartRequest(Request, RequestDone);
   finally
     Request.Free;
   end;
@@ -795,6 +932,67 @@ begin
   begin
     Key := 0;
     btnRefreshClick(nil);
+  end;
+end;
+
+procedure TfrmMain.tvParentsCreateNodeClass(Sender: TCustomTreeView;
+  var NodeClass: TTreeNodeClass);
+begin
+  NodeClass := TControlNode;
+end;
+
+procedure TfrmMain.tvParentsExpanding(Sender: TObject; Node: TTreeNode;
+  var AllowExpansion: Boolean);
+var
+  Request: TJSONObject;
+begin
+  if FFillingParents or TControlNode(Node).Loaded then
+    Exit;
+  // ChildrenDone unfolds it once the children are added
+  AllowExpansion := False;
+  if FRunner <> nil then
+  begin
+    ShowInfo('Busy with another request; unfold it again in a moment.');
+    Exit;
+  end;
+  Request := TJSONObject.Create;
+  try
+    Request.AddPair('op', 'children');
+    Request.AddPair('address', TControlNode(Node).Address);
+    if StartRequest(Request, ChildrenDone) then
+      FExpandAddress := TControlNode(Node).Address;
+  finally
+    Request.Free;
+  end;
+end;
+
+procedure TfrmMain.tvParentsChange(Sender: TObject; Node: TTreeNode);
+begin
+  if FFillingParents then
+    Exit;
+  // Lets arrow keys settle before inspecting
+  tmrSelect.Enabled := False;
+  tmrSelect.Enabled := Node <> nil;
+end;
+
+procedure TfrmMain.tmrSelectTimer(Sender: TObject);
+var
+  Node: TControlNode;
+  Request: TJSONObject;
+begin
+  if FRunner <> nil then
+    Exit; // tries again on the next tick
+  tmrSelect.Enabled := False;
+  Node := TControlNode(tvParents.Selected);
+  if (Node = nil) or (Node.Address = JStr(FReport, 'control.address')) then
+    Exit;
+  Request := TJSONObject.Create;
+  try
+    Request.AddPair('op', 'get');
+    Request.AddPair('address', Node.Address);
+    StartRequest(Request, SelectDone);
+  finally
+    Request.Free;
   end;
 end;
 
