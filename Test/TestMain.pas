@@ -4,7 +4,7 @@ interface
 
 uses
   Winapi.Windows, System.SysUtils, System.Classes, System.Actions, Vcl.Controls, Vcl.Forms,
-  Vcl.StdCtrls, Vcl.ExtCtrls, Vcl.ActnList, TestFrame;
+  Vcl.StdCtrls, Vcl.ExtCtrls, Vcl.ComCtrls, Vcl.ActnList, TestFrame;
 
 type
   TfrmTest = class(TForm)
@@ -18,6 +18,8 @@ type
     btnAction: TButton;
     alMain: TActionList;
     actSave: TAction;
+    edtLabeled: TLabeledEdit;
+    sbMain: TStatusBar;
     procedure FormCreate(Sender: TObject);
     procedure btnOkClick(Sender: TObject);
     procedure actSaveExecute(Sender: TObject);

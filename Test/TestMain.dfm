@@ -84,6 +84,32 @@ object frmTest: TfrmTest
     Action = actSave
     TabOrder = 5
   end
+  object edtLabeled: TLabeledEdit
+    Left = 300
+    Top = 60
+    Width = 140
+    Height = 23
+    EditLabel.Width = 42
+    EditLabel.Height = 15
+    EditLabel.Caption = 'Labeled'
+    TabOrder = 6
+    Text = 'Labeled edit'
+  end
+  object sbMain: TStatusBar
+    Left = 0
+    Top = 241
+    Width = 460
+    Height = 19
+    Panels = <
+      item
+        Text = 'Ready'
+        Width = 120
+      end
+      item
+        Text = 'Second'
+        Width = 80
+      end>
+  end
   object alMain: TActionList
     Left = 384
     Top = 16

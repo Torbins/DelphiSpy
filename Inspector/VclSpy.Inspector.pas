@@ -10,10 +10,11 @@ unit VclSpy.Inspector;
 
   Requests (VclSpyRequest) are JSON objects with "op" and "address", the
   control.address of an earlier report (or of a parent or child listed in
-  one). Op "get" re-reads the control; op "set" also takes "property" and
-  "value" (text, as reports show values). Both reply with a fresh report of
-  the control; "set" adds "changed" with the old and new value.
-  VclSpy.Properties decides what can be edited. Op "children" replies with
+  one). Op "get" re-reads the control; op "set" also takes "property", a
+  property's path (Caption, Font.Size, BoundsRect.Left, Panels[0].Width),
+  and "value" (text, as reports show values). Both reply with a fresh report
+  of the control; "set" adds "changed" with the old and new value.
+  VclSpy.Members and VclSpy.Properties decide what can be edited. Op "children" replies with
   just "address" and "children", the control's direct children. }
 
 interface
@@ -29,10 +30,10 @@ function VclSpyProbe(Wnd: HWND): BOOL; stdcall;
 implementation
 
 uses
-  Winapi.Messages, System.Types, System.SysUtils, System.Classes, System.TypInfo, System.Variants,
-  System.JSON, System.Generics.Collections, System.Generics.Defaults,
+  Winapi.Messages, System.Types, System.SysUtils, System.Classes, System.TypInfo,
+  System.JSON, System.Generics.Collections,
   Vcl.Graphics, Vcl.Controls, Vcl.Forms,
-  VclSpy.Protocol, VclSpy.Properties, VclSpy.Target, VclSpy.MemoryManager;
+  VclSpy.Protocol, VclSpy.Properties, VclSpy.Members, VclSpy.Target, VclSpy.MemoryManager;
 
 type
   TControlAccess = class(TControl);
@@ -51,6 +52,9 @@ type
 const
   DpiAwarenessPerMonitorV2 = THandle(-4);
   MaxValueLength = 300;
+  // Levels of object properties, collection items and record fields below
+  // the control's properties
+  MaxPropertyDepth = 4;
 
 procedure TDpiMapping.Init(Wnd: HWND);
 var
@@ -211,55 +215,19 @@ begin
   else if IsKindOf(Obj, TFont) then
     Result := Format('(%s) %s, %d pt, %s', [Obj.ClassName, TFont(Obj).Name, TFont(Obj).Size,
       ColorToString(TFont(Obj).Color)])
+  else if IsKindOf(Obj, TCollectionItem) then
+    Result := Format('(%s) %s', [Obj.ClassName, Shorten(TCollectionItem(Obj).DisplayName)])
   else
     Result := '(' + Obj.ClassName + ')';
 end;
 
 // The full value; PropJson shortens it for the report
-function PropValueText(Instance: TObject; Prop: PPropInfo): string;
-var
-  Info: PTypeInfo;
+function MemberText(const Member: TMember): string;
 begin
-  Info := Prop^.PropType^;
-  case Info^.Kind of
-    tkInteger, tkChar, tkWChar, tkEnumeration, tkSet:
-      Result := OrdToText(Info, GetOrdProp(Instance, Prop));
-    tkInt64:
-      Result := IntToStr(GetInt64Prop(Instance, Prop));
-    tkFloat:
-      if IsDateTimeType(Info) then
-        Result := DateTimeToStr(GetFloatProp(Instance, Prop))
-      else
-        Result := FloatToStr(GetFloatProp(Instance, Prop));
-    tkString, tkLString, tkWString, tkUString:
-      Result := GetStrProp(Instance, Prop);
-    tkVariant:
-      Result := VarToStr(GetVariantProp(Instance, Prop));
-    tkClass:
-      Result := ObjectSummary(GetObjectProp(Instance, Prop));
-    tkInterface:
-      if GetInterfaceProp(Instance, Prop) <> nil then
-        Result := '(interface)'
-      else
-        Result := '(nil)';
+  if Member.IsObject then
+    Result := ObjectSummary(Member.GetObject)
   else
-    Result := '';
-  end;
-end;
-
-// Full value of a published or extra property
-function PropertyText(Ctrl: TControl; const Name: string): string;
-var
-  Prop: PPropInfo;
-  Extra: TExtraProp;
-begin
-  Prop := GetPropInfo(Ctrl, Name);
-  if (Prop <> nil) and (Prop^.GetProc <> nil) then
-    Result := PropValueText(Ctrl, Prop)
-  else if FindExtraProp(Ctrl, Name, Extra) then
-    Result := Extra.ValueText(Ctrl)
-  else
-    raise EConvertError.CreateFmt('%s has no property %s.', [Ctrl.ClassName, Name]);
+    Result := Member.ValueText;
 end;
 
 { Event handlers }
@@ -307,7 +275,7 @@ end;
 
 { Sections }
 
-function PropJson(const Name: string; Info: PTypeInfo; const Value, Scope: string;
+function PropJson(const Name, Path: string; Info: PTypeInfo; const Value, Scope: string;
   Editable: Boolean; Types: TJSONObject): TJSONObject;
 var
   Values: TJSONArray;
@@ -316,6 +284,7 @@ begin
   TypeName := GetTypeName(Info);
   Result := TJSONObject.Create;
   AddStr(Result, 'name', Name);
+  AddStr(Result, 'path', Path);
   AddStr(Result, 'type', TypeName);
   AddStr(Result, 'kind', KindName(Info));
   AddStr(Result, 'value', Shorten(Value));
@@ -332,9 +301,62 @@ begin
   end;
 end;
 
-// Published properties, and the TControl/TWinControl properties the class
-// doesn't publish, sorted by name. "types" lists the names that editable
-// enumeration, set, color and cursor types accept.
+// A property, and below it, in "properties", the members of the object or
+// record it returns (VclSpy.Members). Expanded holds the objects whose
+// members are listed already: each object's are listed once.
+function MemberJson(const Member: TMember; const Path: string; Depth: Integer; Types: TJSONObject;
+  Expanded: TList<TObject>): TJSONObject;
+var
+  Value: string;
+  Obj: TObject;
+  Failed: Boolean;
+  Members: TArray<TMember>;
+  Child: TMember;
+  List: TJSONArray;
+begin
+  Obj := nil;
+  Failed := False;
+  try
+    if Member.IsObject then
+    begin
+      Obj := Member.GetObject;
+      Value := ObjectSummary(Obj);
+    end
+    else
+      Value := Member.ValueText;
+  except
+    Value := '<error: ' + ExceptionMessage + '>';
+    Failed := True;
+  end;
+  Result := PropJson(Member.Name, Path, Member.Info, Value, Member.Scope, Member.IsEditable, Types);
+  if Failed or (Depth >= MaxPropertyDepth) then
+    Exit;
+
+  Members := nil;
+  try
+    if (Obj <> nil) and ShowsMembers(Obj) and not Expanded.Contains(Obj) then
+    begin
+      Expanded.Add(Obj);
+      Members := ObjectMembers(Obj);
+    end
+    else if Member.IsRecord then
+      Members := Member.Fields;
+  except
+    AddStr(Result, 'error', ExceptionMessage);
+    Exit;
+  end;
+  if Members = nil then
+    Exit;
+  List := TJSONArray.Create;
+  Result.AddPair('properties', List);
+  for Child in Members do
+    List.AddElement(MemberJson(Child, JoinPath(Path, Child.Name), Depth + 1, Types, Expanded));
+end;
+
+// Published properties, the TControl/TWinControl properties the class
+// doesn't publish, and public record properties, sorted by name, each with
+// the members of the object or record it returns. "types" lists the names
+// that editable enumeration, set, color and cursor types accept.
 procedure AddProperties(Target: TJSONObject; Ctrl: TControl);
 var
   Count, I: Integer;
@@ -342,11 +364,9 @@ var
   Prop: PPropInfo;
   Props, Events: TJSONArray;
   Types: TJSONObject;
-  Items: TList<TJSONObject>;
-  Item: TJSONObject;
-  Extra: TExtraProp;
+  Member: TMember;
   Method: TMethod;
-  Value: string;
+  Expanded: TList<TObject>;
 begin
   Props := TJSONArray.Create;
   Target.AddPair('properties', Props);
@@ -355,55 +375,30 @@ begin
   Types := TJSONObject.Create;
   Target.AddPair('types', Types);
 
-  Items := TList<TJSONObject>.Create;
+  Count := GetPropList(PTypeInfo(Ctrl.ClassInfo), List);
+  if Count > 0 then
   try
-    Count := GetPropList(PTypeInfo(Ctrl.ClassInfo), tkAny, nil);
-    GetMem(List, Count * SizeOf(PPropInfo));
-    try
-      GetPropList(PTypeInfo(Ctrl.ClassInfo), tkAny, List, True);
-      for I := 0 to Count - 1 do
-      begin
-        Prop := List^[I];
-        if Prop^.GetProc = nil then
-          Continue; // write-only
-        if Prop^.PropType^.Kind = tkMethod then
-        begin
-          Method := GetMethodProp(Ctrl, Prop);
-          if Method.Code <> nil then
-            Events.AddElement(HandlerJson(GetPropName(Prop), Method));
-          Continue;
-        end;
-        try
-          Value := PropValueText(Ctrl, Prop);
-        except
-          Value := '<error: ' + ExceptionMessage + '>';
-        end;
-        Items.Add(PropJson(GetPropName(Prop), Prop^.PropType^, Value, 'published',
-          IsEditablePublished(Prop), Types));
-      end;
-    finally
-      FreeMem(List);
-    end;
-
-    for Extra in ExtraPropsOf(Ctrl) do
+    for I := 0 to Count - 1 do
     begin
-      try
-        Value := Extra.ValueText(Ctrl);
-      except
-        Value := '<error: ' + ExceptionMessage + '>';
-      end;
-      Items.Add(PropJson(Extra.Name, Extra.Info, Value, Extra.Scope, Extra.IsEditable, Types));
-    end;
-
-    Items.Sort(TComparer<TJSONObject>.Construct(
-      function(const L, R: TJSONObject): Integer
+      Prop := List^[I];
+      if (Prop^.GetProc <> nil) and (Prop^.PropType^.Kind = tkMethod) then
       begin
-        Result := CompareText(L.GetValue<string>('name'), R.GetValue<string>('name'));
-      end));
-    for Item in Items do
-      Props.AddElement(Item);
+        Method := GetMethodProp(Ctrl, Prop);
+        if Method.Code <> nil then
+          Events.AddElement(HandlerJson(GetPropName(Prop), Method));
+      end;
+    end;
   finally
-    Items.Free;
+    FreeMem(List);
+  end;
+
+  Expanded := TList<TObject>.Create;
+  try
+    Expanded.Add(Ctrl);
+    for Member in ControlMembers(Ctrl) do
+      Props.AddElement(MemberJson(Member, Member.Name, 0, Types, Expanded));
+  finally
+    Expanded.Free;
   end;
 end;
 
@@ -743,6 +738,7 @@ var
   Address: UInt64;
   Root: TWinControl;
   Ctrl: TControl;
+  Member: TMember;
 begin
   Root := WindowControl(Wnd);
   if (Root <> nil) and not CheckTarget(Root, Result) then
@@ -784,8 +780,9 @@ begin
       if not Request.TryGetValue<string>('value', Text) then
         Exit(ErrorReport('The request needs "value".'));
       try
-        OldText := PropertyText(Ctrl, Name);
-        SetPropertyText(Ctrl, Name, Text);
+        Member := FindMember(Ctrl, Name);
+        OldText := MemberText(Member);
+        Member.SetValueText(Text);
       except
         // Also exceptions of the target's setter, which aren't the inspector's Exception
         Exit(ErrorReport(Format('Cannot set %s: %s', [Name, ExceptionMessage])));
@@ -793,7 +790,8 @@ begin
       Changed := TJSONObject.Create;
       AddStr(Changed, 'property', Name);
       AddStr(Changed, 'oldValue', Shorten(OldText));
-      AddStr(Changed, 'newValue', Shorten(PropertyText(Ctrl, Name)));
+      // Again: a record field's member holds the record as it was
+      AddStr(Changed, 'newValue', Shorten(MemberText(FindMember(Ctrl, Name))));
     end;
 
     Report := NewReport(Ctrl, ControlWindow(Ctrl, Wnd));

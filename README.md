@@ -8,7 +8,7 @@ Shown for the picked control:
 
 - **Name**, class and unit, and the module (exe/bpl) that defines the class
 - Owner path (`frmMain.fraHeader.btnSave`), parent path, and the owning form with its unit
-- Published properties, the `TControl`/`TWinControl` properties the class doesn't publish (`Caption`, `Color`, `Visible`, `TabOrder`...), and **event handlers**, e.g. `OnClick = TfrmMain.btnSaveClick`. The handler is reported for the class that declares it (a base form, when forms inherit), with its unit.
+- Published properties, the `TControl`/`TWinControl` properties the class doesn't publish (`Caption`, `Color`, `Visible`, `TabOrder`...), public record properties (`BoundsRect`, `ClientRect`), and **event handlers**, e.g. `OnClick = TfrmMain.btnSaveClick`. The handler is reported for the class that declares it (a base form, when forms inherit), with its unit.
 - Bound action and its `OnExecute` handler, class hierarchy, raw JSON, and a history of picks
 - **Parents**: the control tree of the form, unfolded down to the picked control, with all children of each parent on the way. Unfold any control to list its children (read from the target on demand). Select a control to inspect it instead.
 
@@ -20,7 +20,10 @@ Double-click a property (or select it and press Enter, or **Edit...**) to change
 
 - **Editable**: published properties of simple types: integers, characters, floats and dates, strings, enumerations (including `Boolean`), and sets. Colors (`clRed`, `$00BBGGRR`), cursors (`crHandPoint`) and shortcuts (`Ctrl+S`) take names.
 - Also the properties `TControl` and `TWinControl` declare public or protected, so classes that don't publish them still get them (column *Scope*): `Visible`, `Enabled`, `Align`, `Anchors`, `BiDiMode`, `ClientWidth`, `ClientHeight`, `ShowHint`, `StyleElements`, `StyleName`, `Caption`, `Text`, `Color`, `ParentColor`, `ParentFont`, `ParentShowHint`, `ParentBiDiMode`, `AutoSize`, `DragMode`, `DragKind`, `DragCursor`; for windowed controls also `TabOrder`, `TabStop`, `DoubleBuffered`, `ParentDoubleBuffered`, `Bevel*`, `BorderWidth`, `Ctl3D`, `ParentCtl3D`, `ParentBackground`, `ImeMode`, `ImeName`, and read-only `Showing`. The list is `RegisterExtraProps` in `Inspector\VclSpy.Properties.pas`.
-- **Not editable**: object properties (`Font`, `Margins`, `Items`...), events, variants, and `Name`. Renaming at run time breaks `FindComponent` lookups and the paths VclSpy shows.
+- **Object and record properties** are read-only themselves, but unfold, like in the Object Inspector, to their members, which are read and edited like the control's properties. Click the plus box, double-click the property, or select it and press Enter or the Right arrow (Left folds it again, or goes to the property a member belongs to). Typing a filter lists the matching properties at any depth by their path (`Font.Size`).
+  - Objects (`Font`, `Margins`, `Constraints`, `TLabeledEdit.EditLabel`...) unfold to their published properties, and collections (`TStatusBar.Panels`, `TListView.Columns`) to their items, `[0]`, `[1]`... (the first 100). Properties that refer to other components (`Action`, `PopupMenu`, `Images`) are not unfolded; inspect those components instead. Each object is unfolded once per report, up to 4 levels deep.
+  - Records can't be published, so they come from the public properties of the class (`BoundsRect`, `ClientRect`, `ClientOrigin` of every control). They unfold to their fields, nested records too (`BoundsRect.TopLeft.X`). Editing a field reads the record from the property, changes the field, and passes the record to the property's setter. The fields of a record property without a setter (`ClientRect`) are read-only.
+- **Not editable**: events, variants, and `Name`. Renaming at run time breaks `FindComponent` lookups and the paths VclSpy shows.
 
 The editor offers names for enumerations, sets, colors and cursors. If the target refuses a value (not an integer, out of range, an exception from the setter), the editor opens again with the error.
 
@@ -93,7 +96,15 @@ Each entry of `control.parents`, and of the `children` lists in a report, has an
 echo {"op":"children","address":"$02A41B20"} | bin\x86\VclSpyInject.exe --hwnd 1715004 --request -
 ```
 
-`--request <file>` reads the request from a UTF-8 file instead. A `set` reply adds `"changed": {"property", "oldValue", "newValue"}`. Each property in a report has `kind`, `scope` and `editable`, and `control.types` lists the names of the editable enumeration, set, color and cursor types.
+`"property"` is a property's path: its name, or for a member of an object or record property the names joined with `.`, and collection items as `[index]`:
+
+```bat
+echo {"op":"set","address":"$02A41B20","property":"Font.Size","value":"12"} | bin\x86\VclSpyInject.exe --hwnd 1715004 --request -
+echo {"op":"set","address":"$02A41B20","property":"BoundsRect.Left","value":"20"} | bin\x86\VclSpyInject.exe --hwnd 1715004 --request -
+echo {"op":"set","address":"$02A41B20","property":"Panels[0].Text","value":"Ready"} | bin\x86\VclSpyInject.exe --hwnd 1715004 --request -
+```
+
+`--request <file>` reads the request from a UTF-8 file instead. A `set` reply adds `"changed": {"property", "oldValue", "newValue"}`. Each property in a report has `name`, `path`, `kind` (`class` and `record` for object and record properties), `scope` (`field` for record fields, `item` for collection items) and `editable`. Object and record properties that unfold have their members in `properties`. `control.types` lists the names of the editable enumeration, set, color and cursor types, also those of members.
 
 ## Tests
 
@@ -109,6 +120,7 @@ powershell -ExecutionPolicy Bypass -File Test\run-tests.ps1
 - In a target with runtime packages, controls of modules that link the VCL statically (a DLL with its own VCL) are not visible to the shared VCL; VclSpy reports this.
 - Without runtime packages, the inspector works on objects of a VCL copy that isn't its own. It is less robust than a package inspector, especially without `ShareMem`. Don't count on the target being in a good state after a debugging session.
 - Elevated targets need VclSpy to run as administrator.
-- Reading properties calls their getters inside the target. That is normally harmless, but it can create window handles that didn't exist yet.
+- Reading properties calls their getters inside the target, also those of record properties and of the properties of unfolded objects. That is normally harmless, but it can create window handles that didn't exist yet (`ClientRect`).
+- Without a shared memory manager (`own, guarded`), the fields of records that hold strings or other managed values are read-only, because the target would keep the inspector's strings.
 - Setting a property runs its setter, and whatever the target's code does then (`OnChange`, `OnResize`...), on the target's GUI thread. If that shows a modal dialog, the request times out after 5 seconds; the change still happens.
 - Values longer than 300 characters are cut off in reports. Editing such a value replaces all of it; the editor says so.

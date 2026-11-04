@@ -8,7 +8,8 @@ unit VclSpy.Properties;
   strings, enumerations, sets of up to 32 elements) and the TControl and
   TWinControl properties in ExtraProps. Those are declared public or
   protected, so RTTI doesn't list them unless a class republishes them;
-  access classes reach them instead.
+  access classes reach them instead. VclSpy.Members reaches the properties of
+  objects and the fields of records that properties return.
 
   A no-packages inspector that doesn't share the target's memory manager
   (VclSpy.Target.TargetMayKeepOurMemory) must not let the target keep a
@@ -46,17 +47,22 @@ type
 
 function OrdToText(Info: PTypeInfo; Value: Int64): string;
 function IsDateTimeType(Info: PTypeInfo): Boolean;
+// Parse text for a type; raise EConvertError with a message for the user
+// when the text doesn't fit it
+function TextToOrd(Info: PTypeInfo; const Text: string): Int64;
+function TextToFloat(Info: PTypeInfo; const Text: string): Extended;
+// Types whose values VclSpy edits as text
+function IsEditableType(Info: PTypeInfo): Boolean;
 
+// The full value of a published property; objects only by class name
+function PublishedText(Instance: TObject; Prop: PPropInfo): string;
 function IsEditablePublished(Prop: PPropInfo): Boolean;
+// Sets a published property; raises EConvertError with a message for the
+// user when it can't be edited or the text doesn't fit its type
 procedure SetPublishedText(Instance: TObject; Prop: PPropInfo; const Text: string);
 
 // ExtraProps that Ctrl has and that its class doesn't publish
 function ExtraPropsOf(Ctrl: TControl): TArray<TExtraProp>;
-function FindExtraProp(Ctrl: TControl; const Name: string; out Prop: TExtraProp): Boolean;
-
-// Sets a published or extra property; raises EConvertError with a message
-// for the user when the text doesn't fit the property's type
-procedure SetPropertyText(Ctrl: TControl; const Name, Text: string);
 
 // "integer", "enum", "set", "string"... for VclSpy's editor
 function KindName(Info: PTypeInfo): string;
@@ -67,15 +73,13 @@ function TypeValuesJson(Info: PTypeInfo): TJSONArray;
 implementation
 
 uses
-  System.Classes, System.UITypes, Vcl.Graphics, Vcl.Forms, Vcl.Menus, VclSpy.Target;
+  System.Classes, System.UITypes, System.Variants, Vcl.Graphics, Vcl.Forms, Vcl.Menus, VclSpy.Target;
 
 type
   TControlAccess = class(TControl);
   TWinControlAccess = class(TWinControl);
 
 const
-  // Writable, but renaming breaks FindComponent lookups and the paths VclSpy shows
-  ReadOnlyNames: array[0..0] of string = ('Name');
   // Offset of StrRec.refCnt from the first character, on Win32 and Win64
   StrRefCountOffset = -8;
 
@@ -266,14 +270,11 @@ begin
   end;
 end;
 
-function IsReadOnlyName(const Name: string): Boolean;
-var
-  S: string;
+// TComponent.Name: writable, but renaming breaks FindComponent lookups and the
+// paths VclSpy shows. Other properties named so (Font.Name) are editable.
+function IsComponentName(Prop: PPropInfo): Boolean;
 begin
-  for S in ReadOnlyNames do
-    if SameText(S, Name) then
-      Exit(True);
-  Result := False;
+  Result := SameText(GetPropName(Prop), 'Name') and IsType(Prop^.PropType^, 'TComponentName');
 end;
 
 // Whether the target may keep the string a setter of Prop gets. In a
@@ -296,7 +297,7 @@ end;
 function IsEditablePublished(Prop: PPropInfo): Boolean;
 begin
   Result := (Prop^.SetProc <> nil) and IsEditableType(Prop^.PropType^) and
-    not IsReadOnlyName(GetPropName(Prop)) and CanSetString(Prop);
+    not IsComponentName(Prop) and CanSetString(Prop);
 end;
 
 // Calls the setter with a copy of Text whose reference count is -1, like a
@@ -323,11 +324,54 @@ begin
   end;
 end;
 
+function PublishedText(Instance: TObject; Prop: PPropInfo): string;
+var
+  Info: PTypeInfo;
+  Obj: TObject;
+begin
+  Info := Prop^.PropType^;
+  case Info^.Kind of
+    tkInteger, tkChar, tkWChar, tkEnumeration, tkSet:
+      Result := OrdToText(Info, GetOrdProp(Instance, Prop));
+    tkInt64:
+      Result := IntToStr(GetInt64Prop(Instance, Prop));
+    tkFloat:
+      if IsDateTimeType(Info) then
+        Result := DateTimeToStr(GetFloatProp(Instance, Prop))
+      else
+        Result := FloatToStr(GetFloatProp(Instance, Prop));
+    tkString, tkLString, tkWString, tkUString:
+      Result := GetStrProp(Instance, Prop);
+    tkVariant:
+      Result := VarToStr(GetVariantProp(Instance, Prop));
+    tkClass:
+      begin
+        Obj := GetObjectProp(Instance, Prop);
+        if Obj = nil then
+          Result := '(nil)'
+        else
+          Result := '(' + Obj.ClassName + ')';
+      end;
+    tkInterface:
+      if GetInterfaceProp(Instance, Prop) <> nil then
+        Result := '(interface)'
+      else
+        Result := '(nil)';
+  else
+    Result := '';
+  end;
+end;
+
 procedure SetPublishedText(Instance: TObject; Prop: PPropInfo; const Text: string);
 var
   Info: PTypeInfo;
 begin
   Info := Prop^.PropType^;
+  if (Prop^.SetProc <> nil) and IsEditableType(Info) and not CanSetString(Prop) then
+    raise EConvertError.CreateFmt('%s (%s) cannot be edited: the inspector doesn''t share the ' +
+      'target''s memory manager.', [GetPropName(Prop), GetTypeName(Info)]);
+  if not IsEditablePublished(Prop) then
+    raise EConvertError.CreateFmt('%s (%s) cannot be edited in VclSpy.', [GetPropName(Prop), GetTypeName(Info)]);
   case Info^.Kind of
     tkInteger, tkChar, tkWChar, tkEnumeration, tkSet:
       SetOrdProp(Instance, Prop, NativeInt(TextToOrd(Info, Text)));
@@ -393,41 +437,6 @@ begin
   for P in ExtraProps do
     if P.AppliesTo(Ctrl) and (GetPropInfo(Ctrl, P.Name) = nil) then
       Result := Result + [P];
-end;
-
-function FindExtraProp(Ctrl: TControl; const Name: string; out Prop: TExtraProp): Boolean;
-var
-  P: TExtraProp;
-begin
-  for P in ExtraProps do
-    if SameText(P.Name, Name) and P.AppliesTo(Ctrl) then
-    begin
-      Prop := P;
-      Exit(True);
-    end;
-  Result := False;
-end;
-
-procedure SetPropertyText(Ctrl: TControl; const Name, Text: string);
-var
-  Prop: PPropInfo;
-  Extra: TExtraProp;
-begin
-  Prop := GetPropInfo(Ctrl, Name);
-  if Prop <> nil then
-  begin
-    if (Prop^.SetProc <> nil) and IsEditableType(Prop^.PropType^) and not CanSetString(Prop) then
-      raise EConvertError.CreateFmt('%s (%s) cannot be edited: the inspector doesn''t share the ' +
-        'target''s memory manager.', [GetPropName(Prop), GetTypeName(Prop^.PropType^)]);
-    if not IsEditablePublished(Prop) then
-      raise EConvertError.CreateFmt('%s (%s) cannot be edited in VclSpy.',
-        [GetPropName(Prop), GetTypeName(Prop^.PropType^)]);
-    SetPublishedText(Ctrl, Prop, Text);
-  end
-  else if FindExtraProp(Ctrl, Name, Extra) then
-    Extra.SetValueText(Ctrl, Text)
-  else
-    raise EConvertError.CreateFmt('%s has no property %s that VclSpy can edit.', [Ctrl.ClassName, Name]);
 end;
 
 { The TControl and TWinControl properties }
@@ -616,6 +625,7 @@ begin
     tkString, tkLString, tkWString, tkUString: Result := 'string';
     tkVariant: Result := 'variant';
     tkClass: Result := 'class';
+    tkRecord, tkMRecord: Result := 'record';
     tkInterface: Result := 'interface';
   else
     Result := 'other';

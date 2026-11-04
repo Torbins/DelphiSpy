@@ -80,6 +80,21 @@ function Prop($Report, $Name) {
     return $Report.control.properties | Where-Object name -eq $Name
 }
 
+# A property at any depth, by path: Font.Size, BoundsRect.Left, Panels[0].Text
+function FindPath($Props, $Path) {
+    foreach ($p in $Props) {
+        if ($p.path -eq $Path) { return $p }
+        if ($p.properties) {
+            $found = FindPath $p.properties $Path
+            if ($found) { return $found }
+        }
+    }
+}
+
+function SubProp($Report, $Path) {
+    return FindPath $Report.control.properties $Path
+}
+
 function Child([IntPtr]$Parent, $Cls, $Text) {
     # PowerShell would pass $null to a string parameter as ''
     if ($null -eq $Text) { $Text = [NullString]::Value }
@@ -260,6 +275,79 @@ foreach ($v in $variants) {
 
         $s = SetProp $v.Arch $s 'Caption' 'OK'
         Check 'restore Caption' $s.control.text 'OK'
+
+        # Object properties: read-only themselves, their properties are edited
+        $font = Prop $s 'Font'
+        Check 'Font kind' $font.kind 'class'
+        Check 'Font editable' $font.editable $false
+        Check 'Font.Size path' ($font.properties | Where-Object name -eq 'Size').path 'Font.Size'
+        Check 'Font.Size editable' (SubProp $s 'Font.Size').editable $true
+        # Unlike TComponent.Name
+        Check 'Font.Name editable' (SubProp $s 'Font.Name').editable $true
+        Check 'Font.Style values' ($s.control.types.TFontStyles -join ',') 'fsBold,fsItalic,fsUnderline,fsStrikeOut'
+        $s = SetProp $v.Arch $s 'Font.Size' '12'
+        Check 'set Font.Size' (SubProp $s 'Font.Size').value '12'
+        Check 'set Font.Size changed property' $s.changed.property 'Font.Size'
+        Check 'set Font.Size old value' $s.changed.oldValue '9'
+        $s = SetProp $v.Arch $s 'Font.Style' '[fsBold]'
+        Check 'set Font.Style' (SubProp $s 'Font.Style').value '[fsBold]'
+        $s = SetProp $v.Arch $s 'Font.Name' 'Tahoma'
+        Check 'set Font.Name' (SubProp $s 'Font.Name').value 'Tahoma'
+        $s = SetProp $v.Arch $s 'Margins.Left' '7'
+        Check 'set Margins.Left' (SubProp $s 'Margins.Left').value '7'
+        $e = SetProp $v.Arch $s 'Font' 'Arial'
+        CheckLike 'set object error' $e.error '*is an object*'
+        $e = SetProp $v.Arch $s 'Font.NoSuchProperty' '1'
+        CheckLike 'nested unknown property error' $e.error '*Font has no property NoSuchProperty*'
+
+        # Record properties are public: read with the getter, fields written
+        # back with the setter
+        $bounds = Prop $s 'BoundsRect'
+        Check 'BoundsRect kind' $bounds.kind 'record'
+        Check 'BoundsRect scope' $bounds.scope 'public'
+        Check 'BoundsRect editable' $bounds.editable $false
+        $b = $s.control.bounds
+        $right = $b.left + $b.width
+        $bottom = $b.top + $b.height
+        Check 'BoundsRect value' $bounds.value ("(Left = $($b.left), Top = $($b.top), Right = $right, Bottom = $bottom, " +
+            "TopLeft = (X = $($b.left), Y = $($b.top)), BottomRight = (X = $right, Y = $bottom))")
+        Check 'BoundsRect.Left editable' (SubProp $s 'BoundsRect.Left').editable $true
+        Check 'BoundsRect.Left scope' (SubProp $s 'BoundsRect.Left').scope 'field'
+        Check 'ClientRect.Right editable (no setter)' (SubProp $s 'ClientRect.Right').editable $false
+        $s = SetProp $v.Arch $s 'BoundsRect.Left' '20'
+        Check 'set BoundsRect.Left' $s.control.bounds.left 20
+        Check 'set BoundsRect.Left keeps Right' $s.control.bounds.width ($right - 20)
+        $s = SetProp $v.Arch $s 'BoundsRect.TopLeft.X' '16'
+        Check 'set nested record field' $s.control.bounds.left 16
+        $e = SetProp $v.Arch $s 'ClientRect.Right' '50'
+        CheckLike 'read-only record error' $e.error '*ClientRect is read-only*'
+        $e = SetProp $v.Arch $s 'BoundsRect' '1'
+        CheckLike 'set record error' $e.error '*is a record*'
+
+        # Other components are references: not unfolded
+        $r = Inspect $v.Arch (Child $form 'TButton' 'Save')
+        Check 'Action not unfolded' ($null -eq (Prop $r 'Action').properties) $true
+        $e = SetProp $v.Arch $r 'Action.Caption' 'Other'
+        CheckLike 'component reference error' $e.error '*refers to another component, actSave*'
+
+        # Subcomponents are
+        $r = Inspect $v.Arch (Child $form 'TLabeledEdit' 'Labeled edit')
+        Check 'subcomponent EditLabel.Caption' (SubProp $r 'EditLabel.Caption').value 'Labeled'
+        $s = SetProp $v.Arch $r 'EditLabel.Caption' 'Label 2'
+        Check 'set EditLabel.Caption' (SubProp $s 'EditLabel.Caption').value 'Label 2'
+
+        # Collection items
+        $r = Inspect $v.Arch (Child $form 'TStatusBar' $null)
+        Check 'status bar name' $r.control.name 'sbMain'
+        Check 'Panels item scope' (SubProp $r 'Panels[1]').scope 'item'
+        Check 'Panels item value' (SubProp $r 'Panels[1]').value '(TStatusPanel) Second'
+        Check 'Panels[1].Text' (SubProp $r 'Panels[1].Text').value 'Second'
+        $s = SetProp $v.Arch $r 'Panels[1].Text' 'Changed panel'
+        Check 'set Panels[1].Text' (SubProp $s 'Panels[1].Text').value 'Changed panel'
+        $s = SetProp $v.Arch $s 'Panels[0].Width' '150'
+        Check 'set Panels[0].Width' (SubProp $s 'Panels[0].Width').value '150'
+        $e = SetProp $v.Arch $s 'Panels[5].Width' '1'
+        CheckLike 'missing item error' $e.error '*Panels has no property*'
 
         # A graphic control: requests go to its parent's window
         $r = Inspect $v.Arch (Child $form 'TPanel' 'LabelHost')

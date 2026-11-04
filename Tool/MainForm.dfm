@@ -298,16 +298,17 @@ object frmMain: TfrmMain
         Height = 274
         Hint =
           'Gray properties are read-only. Double-click a property to chang' +
-          'e it in the target.'
+          'e it in the target, or an object or record property to unfold ' +
+          'its members.'
         Align = alClient
         Columns = <
           item
             Caption = 'Name'
-            Width = 180
+            Width = 200
           end
           item
             Caption = 'Value'
-            Width = 330
+            Width = 310
           end
           item
             Caption = 'Type'
@@ -324,6 +325,7 @@ object frmMain: TfrmMain
         OnCustomDrawItem = lvPropertiesCustomDrawItem
         OnDblClick = lvPropertiesDblClick
         OnKeyDown = lvPropertiesKeyDown
+        OnMouseDown = lvPropertiesMouseDown
         OnSelectItem = lvPropertiesSelectItem
       end
     end

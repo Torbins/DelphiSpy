@@ -12,6 +12,7 @@ uses
   VclSpy.MemoryManager in 'VclSpy.MemoryManager.pas',
   VclSpy.Target in 'VclSpy.Target.pas',
   VclSpy.Properties in 'VclSpy.Properties.pas',
+  VclSpy.Members in 'VclSpy.Members.pas',
   VclSpy.Inspector in 'VclSpy.Inspector.pas';
 
 exports

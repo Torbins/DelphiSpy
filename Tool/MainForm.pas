@@ -70,6 +70,8 @@ type
     procedure lvPropertiesSelectItem(Sender: TObject; Item: TListItem; Selected: Boolean);
     procedure lvPropertiesCustomDrawItem(Sender: TCustomListView; Item: TListItem;
       State: TCustomDrawState; var DefaultDraw: Boolean);
+    procedure lvPropertiesMouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState;
+      X, Y: Integer);
     procedure FormKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
     procedure tvParentsCreateNodeClass(Sender: TCustomTreeView; var NodeClass: TTreeNodeClass);
     procedure tvParentsExpanding(Sender: TObject; Node: TTreeNode; var AllowExpansion: Boolean);
@@ -84,7 +86,10 @@ type
     FHistoryJson: TStringList; // parallel to lbHistory.Items, newest first
     // The edit in flight, to reopen the editor with it if the target refuses it
     FEditName, FEditText: string;
-    FSelectedName: string; // reselected when the property list is filled again
+    FSelectedPath: string; // reselected when the property list is filled again
+    // Paths of the object and record properties whose members are shown
+    FExpanded: TStringList;
+    FExpanderImages: TImageList;
     FFillingParents: Boolean; // tvParents selection changes are not the user's
     FExpandAddress: string; // the control whose children are being requested
     procedure FinderPickMove(Sender: TObject; Wnd: HWND; const ScreenPt: TPoint);
@@ -98,8 +103,13 @@ type
     function StartRequest(Request: TJSONObject; OnDone: TNotifyEvent): Boolean;
     function ReportOk: Boolean;
     function SelectedProperty: TJSONObject;
-    function FindProperty(const Name: string): TJSONObject;
+    function FindProperty(const Path: string): TJSONObject;
     procedure EditProperty(Prop: TJSONObject; const Text, Error: string);
+    procedure EditOrToggle(Prop: TJSONObject);
+    procedure SetExpanded(Prop: TJSONObject; Expand: Boolean);
+    procedure SelectPath(const Path: string);
+    procedure CreateExpanderImages;
+    procedure FormAfterMonitorDpiChanged(Sender: TObject; OldDPI, NewDPI: Integer);
     procedure UpdatePropertyButtons;
     procedure ShowReport(const Json: string; AddToHistory: Boolean);
     procedure ShowError(const Msg: string);
@@ -121,7 +131,7 @@ implementation
 {$R *.dfm}
 
 uses
-  System.Generics.Collections, System.UITypes, Vcl.Clipbrd, PropEditor;
+  System.Generics.Collections, System.UITypes, System.Math, Vcl.Clipbrd, PropEditor;
 
 const
   MaxHistory = 30;
@@ -258,6 +268,55 @@ begin
   Result := nil;
 end;
 
+const
+  // FExpanderImages
+  imgExpand = 0;
+  imgCollapse = 1;
+  imgNone = 2;
+
+// "Font.Size", "Panels[0].Width". Reports of older inspectors have names only.
+function PropPath(Prop: TJSONObject): string;
+begin
+  Result := JStr(Prop, 'path');
+  if Result = '' then
+    Result := JStr(Prop, 'name');
+end;
+
+// The properties of an object property, or the fields of a record property;
+// nil for other properties
+function PropMembers(Prop: TJSONObject): TJSONArray;
+begin
+  Result := JArr(Prop, 'properties');
+end;
+
+// "Font" for "Font.Size", "Panels" for "Panels[0]", '' for "Font"
+function ParentPropPath(const Path: string): string;
+var
+  I: Integer;
+begin
+  for I := Length(Path) downto 1 do
+    if (Path[I] = '.') or (Path[I] = '[') then
+      Exit(Copy(Path, 1, I - 1));
+  Result := '';
+end;
+
+function FindPropIn(Props: TJSONArray; const Path: string): TJSONObject;
+var
+  Element: TJSONValue;
+begin
+  if Props <> nil then
+    for Element in Props do
+    begin
+      Result := Element as TJSONObject;
+      if SameText(PropPath(Result), Path) then
+        Exit;
+      Result := FindPropIn(PropMembers(Result), Path);
+      if Result <> nil then
+        Exit;
+    end;
+  Result := nil;
+end;
+
 // Each caption becomes a child of the one before it, outermost first
 procedure FillChain(Tree: TTreeView; const Captions: TArray<string>);
 var
@@ -283,6 +342,12 @@ end;
 procedure TfrmMain.FormCreate(Sender: TObject);
 begin
   FHistoryJson := TStringList.Create;
+  FExpanded := TStringList.Create;
+  FExpanded.Sorted := True;
+  FExpanded.CaseSensitive := False;
+  FExpanded.Duplicates := dupIgnore;
+  CreateExpanderImages;
+  OnAfterMonitorDpiChanged := FormAfterMonitorDpiChanged;
   FFrame := THighlightFrame.Create(Self);
   FFinder := TFinderTool.Create(Self);
   FFinder.Parent := pnlFinder;
@@ -311,6 +376,56 @@ begin
     FRunner.OnTerminate := nil; // it frees itself; just don't call back into a dead form
   FReport.Free;
   FHistoryJson.Free;
+  FExpanded.Free;
+end;
+
+// Plus and minus boxes for object and record properties, and a blank image
+// that keeps the names of other properties in line
+procedure TfrmMain.CreateExpanderImages;
+var
+  Size, Box, Line, I, MidX, MidY: Integer;
+  R: TRect;
+  Bmp: TBitmap;
+begin
+  Size := MulDiv(16, CurrentPPI, 96);
+  Box := MulDiv(9, CurrentPPI, 96) or 1; // odd, to center the lines
+  Line := Max(1, CurrentPPI div 96);
+  if FExpanderImages = nil then
+    FExpanderImages := TImageList.Create(Self);
+  FExpanderImages.Clear;
+  FExpanderImages.SetSize(Size, Size);
+  Bmp := TBitmap.Create;
+  try
+    Bmp.SetSize(Size, Size);
+    for I := imgExpand to imgNone do
+    begin
+      Bmp.Canvas.Brush.Color := clFuchsia;
+      Bmp.Canvas.FillRect(Rect(0, 0, Size, Size));
+      if I <> imgNone then
+      begin
+        R := Bounds((Size - Box) div 2, (Size - Box) div 2, Box, Box);
+        Bmp.Canvas.Pen.Color := clGrayText;
+        Bmp.Canvas.Brush.Color := clWindow;
+        Bmp.Canvas.Rectangle(R);
+        MidX := R.Left + Box div 2 - Line div 2;
+        MidY := R.Top + Box div 2 - Line div 2;
+        Bmp.Canvas.Brush.Color := clWindowText;
+        Bmp.Canvas.FillRect(Rect(R.Left + 2 * Line, MidY, R.Right - 2 * Line, MidY + Line));
+        if I = imgExpand then
+          Bmp.Canvas.FillRect(Rect(MidX, R.Top + 2 * Line, MidX + Line, R.Bottom - 2 * Line));
+      end;
+      FExpanderImages.AddMasked(Bmp, clFuchsia);
+    end;
+  finally
+    Bmp.Free;
+  end;
+  lvProperties.SmallImages := FExpanderImages;
+end;
+
+procedure TfrmMain.FormAfterMonitorDpiChanged(Sender: TObject; OldDPI, NewDPI: Integer);
+begin
+  CreateExpanderImages;
+  FillProperties;
 end;
 
 procedure TfrmMain.FinderPickMove(Sender: TObject; Wnd: HWND; const ScreenPt: TPoint);
@@ -481,13 +596,63 @@ begin
   UpdatePropertyButtons;
 end;
 
+// The properties as a tree: the members of object and record properties
+// below them, indented, shown once unfolded. With a filter, every property
+// that matches is listed by its path, also those of folded ones.
 procedure TfrmMain.FillProperties;
 var
+  Filter: string;
+  Selected: TListItem;
+
+  procedure AddRows(Props: TJSONArray; Level: Integer);
+  var
+    Element: TJSONValue;
+    Prop: TJSONObject;
+    Members: TJSONArray;
+    Path, Value: string;
+    Item: TListItem;
+    Unfolded: Boolean;
+  begin
+    for Element in Props do
+    begin
+      Prop := Element as TJSONObject;
+      Path := PropPath(Prop);
+      Value := JStr(Prop, 'value');
+      Members := PropMembers(Prop);
+      Unfolded := (Filter = '') and (Members <> nil) and (FExpanded.IndexOf(Path) >= 0);
+      if (Filter = '') or (Pos(Filter, LowerCase(Path + ' ' + Value)) > 0) then
+      begin
+        Item := lvProperties.Items.Add;
+        if Filter = '' then
+        begin
+          Item.Caption := JStr(Prop, 'name');
+          Item.Indent := Level;
+          if Members = nil then
+            Item.ImageIndex := imgNone
+          else if Unfolded then
+            Item.ImageIndex := imgCollapse
+          else
+            Item.ImageIndex := imgExpand;
+        end
+        else
+        begin
+          Item.Caption := Path;
+          Item.ImageIndex := imgNone;
+        end;
+        Item.SubItems.Add(Value);
+        Item.SubItems.Add(JStr(Prop, 'type'));
+        Item.SubItems.Add(JStr(Prop, 'scope'));
+        Item.Data := Prop; // owned by FReport, which outlives the list items
+        if SameText(Path, FSelectedPath) then
+          Selected := Item;
+      end;
+      if (Members <> nil) and ((Filter <> '') or Unfolded) then
+        AddRows(Members, Level + 1);
+    end;
+  end;
+
+var
   Props: TJSONArray;
-  Element: TJSONValue;
-  Prop: TJSONObject;
-  Filter, Name, Value: string;
-  Item, Selected: TListItem;
 begin
   Props := JArr(JObj(FReport, 'control'), 'properties');
   Filter := LowerCase(Trim(edtFilter.Text));
@@ -496,22 +661,7 @@ begin
   try
     lvProperties.Items.Clear;
     if Props <> nil then
-      for Element in Props do
-      begin
-        Prop := Element as TJSONObject;
-        Name := JStr(Prop, 'name');
-        Value := JStr(Prop, 'value');
-        if (Filter <> '') and (Pos(Filter, LowerCase(Name + ' ' + Value)) = 0) then
-          Continue;
-        Item := lvProperties.Items.Add;
-        Item.Caption := Name;
-        Item.SubItems.Add(Value);
-        Item.SubItems.Add(JStr(Prop, 'type'));
-        Item.SubItems.Add(JStr(Prop, 'scope'));
-        Item.Data := Prop; // owned by FReport, which outlives the list items
-        if SameText(Name, FSelectedName) then
-          Selected := Item;
-      end;
+      AddRows(Props, 0);
   finally
     lvProperties.Items.EndUpdate;
   end;
@@ -537,17 +687,57 @@ begin
     Result := TJSONObject(lvProperties.Selected.Data);
 end;
 
-function TfrmMain.FindProperty(const Name: string): TJSONObject;
-var
-  Element: TJSONValue;
-  Props: TJSONArray;
+function TfrmMain.FindProperty(const Path: string): TJSONObject;
 begin
-  Props := JArr(JObj(FReport, 'control'), 'properties');
-  if Props <> nil then
-    for Element in Props do
-      if SameText(JStr(Element as TJSONObject, 'name'), Name) then
-        Exit(TJSONObject(Element));
-  Result := nil;
+  Result := FindPropIn(JArr(JObj(FReport, 'control'), 'properties'), Path);
+end;
+
+procedure TfrmMain.SetExpanded(Prop: TJSONObject; Expand: Boolean);
+var
+  Path: string;
+  I: Integer;
+begin
+  if (Prop = nil) or (PropMembers(Prop) = nil) then
+    Exit;
+  Path := PropPath(Prop);
+  if Expand then
+    FExpanded.Add(Path)
+  else if FExpanded.Find(Path, I) then
+    FExpanded.Delete(I);
+  FSelectedPath := Path;
+  FillProperties;
+  // Scrolls the members into view, as far as the property itself stays in view
+  if Expand and (lvProperties.Selected <> nil) then
+  begin
+    I := Min(lvProperties.Selected.Index + PropMembers(Prop).Count, lvProperties.Items.Count - 1);
+    lvProperties.Items[I].MakeVisible(False);
+    lvProperties.Selected.MakeVisible(False);
+  end;
+end;
+
+procedure TfrmMain.SelectPath(const Path: string);
+var
+  Item: TListItem;
+begin
+  for Item in lvProperties.Items do
+    if SameText(PropPath(TJSONObject(Item.Data)), Path) then
+    begin
+      Item.Selected := True;
+      Item.Focused := True;
+      Item.MakeVisible(False);
+      Exit;
+    end;
+end;
+
+// Edits a property, or folds or unfolds an object or record property
+procedure TfrmMain.EditOrToggle(Prop: TJSONObject);
+begin
+  if Prop = nil then
+    Exit;
+  if Prop.GetValue<Boolean>('editable', False) then
+    EditProperty(Prop, JStr(Prop, 'value'), '')
+  else
+    SetExpanded(Prop, FExpanded.IndexOf(PropPath(Prop)) < 0);
 end;
 
 procedure TfrmMain.UpdatePropertyButtons;
@@ -567,7 +757,7 @@ var
 begin
   if (Prop = nil) or not Prop.GetValue<Boolean>('editable', False) or (FRunner <> nil) then
     Exit;
-  Info.Name := JStr(Prop, 'name');
+  Info.Name := PropPath(Prop);
   Info.TypeName := JStr(Prop, 'type');
   Info.Kind := JStr(Prop, 'kind');
   Info.Scope := JStr(Prop, 'scope');
@@ -899,23 +1089,71 @@ begin
 end;
 
 procedure TfrmMain.lvPropertiesDblClick(Sender: TObject);
+var
+  P: TPoint;
 begin
-  btnEditClick(nil);
+  // The clicks on a plus or minus box folded or unfolded it already
+  P := lvProperties.ScreenToClient(Mouse.CursorPos);
+  if htOnIcon in lvProperties.GetHitTestInfoAt(P.X, P.Y) then
+    Exit;
+  EditOrToggle(SelectedProperty);
 end;
 
 procedure TfrmMain.lvPropertiesKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+var
+  Prop: TJSONObject;
+  Unfolded: Boolean;
 begin
-  if (Key = VK_RETURN) or (Key = VK_F2) then
-  begin
-    Key := 0;
-    btnEditClick(nil);
+  Prop := SelectedProperty;
+  case Key of
+    VK_RETURN, VK_F2:
+      begin
+        Key := 0;
+        EditOrToggle(Prop);
+      end;
+    // Unfold, fold, or go to the object or record a member belongs to
+    VK_RIGHT, VK_ADD, VK_LEFT, VK_SUBTRACT:
+      if (Prop <> nil) and (Trim(edtFilter.Text) = '') then
+      begin
+        Unfolded := FExpanded.IndexOf(PropPath(Prop)) >= 0;
+        if (Key = VK_RIGHT) or (Key = VK_ADD) then
+        begin
+          if (PropMembers(Prop) <> nil) and not Unfolded then
+            SetExpanded(Prop, True);
+        end
+        else if (PropMembers(Prop) <> nil) and Unfolded then
+          SetExpanded(Prop, False)
+        else if ParentPropPath(PropPath(Prop)) <> '' then
+          SelectPath(ParentPropPath(PropPath(Prop)));
+        Key := 0;
+      end;
   end;
+end;
+
+procedure TfrmMain.lvPropertiesMouseDown(Sender: TObject; Button: TMouseButton; Shift: TShiftState;
+  X, Y: Integer);
+var
+  Item: TListItem;
+  Path: string;
+begin
+  if (Button <> mbLeft) or (ssDouble in Shift) or not (htOnIcon in lvProperties.GetHitTestInfoAt(X, Y)) then
+    Exit;
+  Item := lvProperties.GetItemAt(X, Y);
+  if (Item = nil) or (PropMembers(TJSONObject(Item.Data)) = nil) then
+    Exit;
+  Path := PropPath(TJSONObject(Item.Data));
+  // Not while the list view handles the click: this fills it again
+  TThread.ForceQueue(nil,
+    procedure
+    begin
+      SetExpanded(FindProperty(Path), FExpanded.IndexOf(Path) < 0);
+    end);
 end;
 
 procedure TfrmMain.lvPropertiesSelectItem(Sender: TObject; Item: TListItem; Selected: Boolean);
 begin
   if Selected then
-    FSelectedName := Item.Caption;
+    FSelectedPath := PropPath(TJSONObject(Item.Data));
   UpdatePropertyButtons;
 end;
 
