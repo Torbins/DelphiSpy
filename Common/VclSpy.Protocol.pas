@@ -24,9 +24,14 @@ const
   VclSpyInspectExport = 'VclSpyInspect';
   VclSpyRequestExport = 'VclSpyRequest';
   // The no-packages inspectors, VclSpyInspectNoPkg<suffix>.dll, for targets
-  // that link the VCL statically
+  // that link the VCL statically. They are packages that contain the RTL and
+  // VCL: Initialize and Finalize (exported by every package) initialize and
+  // finalize their units.
   VclSpyNoPkgDllPrefix = 'VclSpyInspectNoPkg';
   VclSpyProbeExport = 'VclSpyProbe';
+  VclSpyActiveExport = 'VclSpyActive';
+  VclSpyInitializeExport = 'Initialize';
+  VclSpyFinalizeExport = 'Finalize';
   VclSpyInjectExeName = 'VclSpyInject.exe';
 
   // BPL suffixes of the Delphi versions the hook stub looks for, newest first.
@@ -42,6 +47,11 @@ type
   // Exported by the no-packages inspector DLLs: True if the VCL control of Wnd
   // (or of a parent window) is of the Delphi version the DLL was built with.
   TVclSpyProbeProc = function(Wnd: HWND): BOOL; stdcall;
+  // Exported by the no-packages inspector DLLs: False once the target's
+  // application window is gone and the DLL finalized itself.
+  TVclSpyActiveProc = function: BOOL; stdcall;
+  // Initialize and Finalize of a package
+  TVclSpyPackageProc = procedure;
 
 function PackPoint(X, Y: Integer): LPARAM;
 procedure UnpackPoint(Value: LPARAM; out X, Y: Integer);

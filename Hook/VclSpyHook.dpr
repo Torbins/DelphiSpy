@@ -112,6 +112,16 @@ begin
   Result := False;
 end;
 
+// Calls Initialize or Finalize of a no-packages inspector, a package
+procedure CallPackageProc(Lib: HMODULE; const Name: string);
+var
+  Proc: TVclSpyPackageProc;
+begin
+  @Proc := GetProcAddress(Lib, PChar(Name));
+  if Assigned(Proc) then
+    Proc;
+end;
+
 // For a target without VCL package: loads the no-packages inspector of the
 // target's Delphi version. That is the one an earlier pick loaded, or else
 // the first, newest version first, whose probe accepts the control of Wnd.
@@ -121,6 +131,7 @@ var
   I: Integer;
   Name, Path, Tried: string;
   Probe: TVclSpyProbeProc;
+  Active: TVclSpyActiveProc;
   Err: DWORD;
 begin
   if not IsVclWindow(Wnd) then
@@ -134,7 +145,14 @@ begin
   begin
     Result := GetModuleHandle(PChar(VclSpyNoPkgDllPrefix + VclSpyPackageSuffixes[I] + '.dll'));
     if Result <> 0 then
-      Exit;
+    begin
+      @Active := GetProcAddress(Result, PChar(VclSpyActiveExport));
+      if Assigned(Active) and Active then
+        Exit;
+      SendError(ReplyWnd, 'The target is closing: its application window is gone, and the inspector ' +
+        'finalized itself.');
+      Exit(0);
+    end;
   end;
 
   Tried := '';
@@ -151,11 +169,14 @@ begin
       Tried := Tried + ', ' + Name + ' (cannot load it, error ' + IntToStr(Err) + ')';
       Continue;
     end;
+    // Loading a package doesn't initialize its units
+    CallPackageProc(Result, VclSpyInitializeExport);
     @Probe := GetProcAddress(Result, PChar(VclSpyProbeExport));
     // Stays loaded, like the package inspectors
     if Assigned(Probe) and Probe(Wnd) then
       Exit;
-    // Another Delphi version. Without packages, the DLL unloads cleanly.
+    // Another Delphi version. With its own RTL and VCL, it unloads cleanly.
+    CallPackageProc(Result, VclSpyFinalizeExport);
     FreeLibrary(Result);
     Tried := Tried + ', ' + Name;
   end;

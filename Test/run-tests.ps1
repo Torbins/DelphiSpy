@@ -112,8 +112,7 @@ $variants = @(
     @{ Dir = '280-x64-nopkg'; Arch = 'x64'; Title = 'VclSpy Test 35 x64 static'; Memory = 'own, guarded' },
     @{ Dir = '280-x86-sharemem'; Arch = 'x86'; Title = 'VclSpy Test 35 x86 static ShareMem'; Memory = 'borlndmm.dll' },
     @{ Dir = '280-x64-sharemem'; Arch = 'x64'; Title = 'VclSpy Test 35 x64 static ShareMem'; Memory = 'borlndmm.dll' },
-    # The exe frees its shared memory manager's memory before the inspector ends
-    @{ Dir = '280-x86-simplesharemem'; Arch = 'x86'; Title = 'VclSpy Test 35 x86 static SimpleShareMem'; Memory = 'own, guarded' }
+    @{ Dir = '280-x86-simplesharemem'; Arch = 'x86'; Title = 'VclSpy Test 35 x86 static SimpleShareMem'; Memory = 'shared by the target' }
 )
 
 foreach ($v in $variants) {

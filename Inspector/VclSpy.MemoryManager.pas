@@ -5,19 +5,22 @@ unit VclSpy.MemoryManager;
   so strings that the target's code returns to it, and strings it hands to the
   target's code, cross between two memory managers unless they share one.
 
-  This must be the first unit of the dpr, so that it runs before anything is
-  allocated. It uses nothing but System for that reason.
+  This must be the first unit of the package, so that it runs before anything
+  is allocated. It uses nothing but System for that reason. In order:
 
   - borlndmm.dll is loaded (the target uses ShareMem): use its functions, as
-    ShareMem would. borlndmm.dll outlives this DLL when the process ends.
+    ShareMem would.
+  - Another module shares its memory manager (SimpleShareMem, FastMM's
+    ShareMM): use that one. The exe frees all of its memory when it ends;
+    VclSpy.NoPkg finalizes the inspector before that.
   - Otherwise keep the inspector's own memory manager, but guard it: blocks
     it allocates carry a mark, and blocks without it, the target's, are never
     freed by it (they leak), only copied when reallocated. The target can
     still free blocks of the inspector that it keeps; VclSpy.Properties
     avoids handing it any.
 
-  A memory manager that the exe shares (SimpleShareMem) is not used: the exe
-  frees all of its memory when it ends, before this DLL is finalized.
+  The first two need the inspector's own memory manager unused so far; if it
+  isn't, because some unit ran before this one, the guard is used.
 
   In the package inspectors this unit does nothing: the rtl package already
   gives them the target's memory manager. }
@@ -25,7 +28,7 @@ unit VclSpy.MemoryManager;
 interface
 
 type
-  TMemoryManagerMode = (mmPackage, mmBorlndMM, mmGuarded);
+  TMemoryManagerMode = (mmPackage, mmBorlndMM, mmShared, mmGuarded);
 
 var
   MemoryManagerMode: TMemoryManagerMode;
@@ -33,6 +36,8 @@ var
 function MemoryManagerText: string;
 
 implementation
+
+{$WARN SYMBOL_PLATFORM OFF}
 
 type
   TMemoryBasicInformation = record
@@ -66,6 +71,7 @@ begin
   case MemoryManagerMode of
     mmPackage: Result := 'rtl package';
     mmBorlndMM: Result := BorlndMM;
+    mmShared: Result := 'shared by the target';
   else
     Result := 'own, guarded';
   end;
@@ -198,6 +204,19 @@ begin
   SetMemoryManager(Guard);
 end;
 
+// True if no block was allocated with the inspector's memory manager yet
+function NothingAllocated: Boolean;
+var
+  State: TMemoryManagerState;
+  I: Integer;
+begin
+  GetMemoryManagerState(State);
+  Result := (State.AllocatedMediumBlockCount = 0) and (State.AllocatedLargeBlockCount = 0);
+  for I := Low(State.SmallBlockTypeStates) to High(State.SmallBlockTypeStates) do
+    if State.SmallBlockTypeStates[I].AllocatedBlockCount <> 0 then
+      Result := False;
+end;
+
 // With runtime packages, System is in the rtl package, not in this module
 function SystemInThisModule: Boolean;
 var
@@ -212,9 +231,14 @@ initialization
     MemoryManagerMode := mmPackage
   else
   begin
+    // A package that contains System is not a library to it, but the VCL must
+    // treat it as one (no TApplication window of its own)
+    IsLibrary := True;
     GetMemoryManager(Original);
-    if UseBorlndMM then
+    if NothingAllocated and UseBorlndMM then
       MemoryManagerMode := mmBorlndMM
+    else if NothingAllocated and AttemptToUseSharedMemoryManager then
+      MemoryManagerMode := mmShared
     else
     begin
       UseGuard;

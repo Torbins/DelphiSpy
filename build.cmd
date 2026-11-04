@@ -23,10 +23,10 @@ call :dcc "%BDS22%" dcc32 Inspector\VclSpyInspect280.dpr    "%BIN%\x86" inspect2
 call :dcc "%BDS22%" dcc64 Inspector\VclSpyInspect280.dpr    "%BIN%\x64" inspect280-x64 "%PKG%" || goto :fail
 call :dcc "%BDS21%" dcc32 Inspector\VclSpyInspect270.dpr    "%BIN%\x86" inspect270-x86 "%PKG%" || goto :fail
 call :dcc "%BDS21%" dcc64 Inspector\VclSpyInspect270.dpr    "%BIN%\x64" inspect270-x64 "%PKG%" || goto :fail
-call :dcc "%BDS22%" dcc32 Inspector\VclSpyInspectNoPkg280.dpr "%BIN%\x86" inspectnopkg280-x86 "" || goto :fail
-call :dcc "%BDS22%" dcc64 Inspector\VclSpyInspectNoPkg280.dpr "%BIN%\x64" inspectnopkg280-x64 "" || goto :fail
-call :dcc "%BDS21%" dcc32 Inspector\VclSpyInspectNoPkg270.dpr "%BIN%\x86" inspectnopkg270-x86 "" || goto :fail
-call :dcc "%BDS21%" dcc64 Inspector\VclSpyInspectNoPkg270.dpr "%BIN%\x64" inspectnopkg270-x64 "" || goto :fail
+call :dcc "%BDS22%" dcc32 Inspector\VclSpyInspectNoPkg280.dpk "%BIN%\x86" inspectnopkg280-x86 "" || goto :fail
+call :dcc "%BDS22%" dcc64 Inspector\VclSpyInspectNoPkg280.dpk "%BIN%\x64" inspectnopkg280-x64 "" || goto :fail
+call :dcc "%BDS21%" dcc32 Inspector\VclSpyInspectNoPkg270.dpk "%BIN%\x86" inspectnopkg270-x86 "" || goto :fail
+call :dcc "%BDS21%" dcc64 Inspector\VclSpyInspectNoPkg270.dpk "%BIN%\x64" inspectnopkg270-x64 "" || goto :fail
 
 if /i "%~1"=="notests" goto :done
 call :dcc "%BDS21%" dcc32 Test\TestTarget.dpr "%TESTBIN%\270-x86"       test-270-x86       "%PKG%" || goto :fail
@@ -53,7 +53,9 @@ echo.
 echo Build FAILED.
 exit /b 1
 
-rem :dcc <bds root> <dcc32|dcc64> <dpr> <exe output dir> <dcu dir name> <extra options>
+rem :dcc <bds root> <dcc32|dcc64> <dpr|dpk> <exe output dir> <dcu dir name> <extra options>
+rem A package goes to -LE (the no-packages inspectors are packages named .dll), its dcp to -LN.
+rem They contain the RTL and VCL implicitly: W1033 is expected for each of those units.
 :dcc
 set "DCUDIR=%ROOT%dcu\%~5"
 if not exist "%~4" mkdir "%~4"
@@ -61,7 +63,7 @@ if not exist "%DCUDIR%" mkdir "%DCUDIR%"
 echo === %~3 (%~2, %~nx1)
 rem "uses ... in '..\x.pas'" paths are relative to the current folder, so build from the dpr's folder
 for %%F in ("%ROOT%%~3") do pushd "%%~dpF"
-"%~1\bin\%~2.exe" -B -Q -NSSystem;System.Win;Winapi;Vcl -E"%~4" -NU"%DCUDIR%" %~6 "%~nx3"
+"%~1\bin\%~2.exe" -B -Q -NSSystem;System.Win;Winapi;Vcl -E"%~4" -LE"%~4" -LN"%DCUDIR%" -NU"%DCUDIR%" -W-IMPLICIT_IMPORT %~6 "%~nx3"
 set "RC=%errorlevel%"
 popd
 exit /b %RC%
