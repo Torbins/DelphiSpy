@@ -25,6 +25,7 @@ contains
   VclSpy.Report in 'VclSpy.Report.pas',
   VclSpy.VclProperties in 'VclSpy.VclProperties.pas',
   VclSpy.Inspector in 'VclSpy.Inspector.pas',
+  VclSpy.SelfFinalize in 'VclSpy.SelfFinalize.pas',
   VclSpy.NoPkg in 'VclSpy.NoPkg.pas';
 
 end.

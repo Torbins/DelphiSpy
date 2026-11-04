@@ -25,6 +25,7 @@ contains
   VclSpy.Members in 'VclSpy.Members.pas',
   VclSpy.Report in 'VclSpy.Report.pas',
   VclSpy.FmxInspector in 'VclSpy.FmxInspector.pas',
+  VclSpy.SelfFinalize in 'VclSpy.SelfFinalize.pas',
   VclSpy.FmxNoPkg in 'VclSpy.FmxNoPkg.pas';
 
 end.

@@ -120,7 +120,9 @@ function Start-Target($Dir, $Title, $Exe = 'TestTarget', $Class = 'TfrmTest') {
     $proc = Start-Process $exe -PassThru
     for ($i = 0; $i -lt 50; $i++) {
         $form = [Win]::FindWindow($Class, $Title)
-        if ($form -ne [IntPtr]::Zero) { return @($proc, $form) }
+        # The caption is set in OnCreate, before the VCL form's child windows exist
+        if (($form -ne [IntPtr]::Zero) -and (($Class -ne 'TfrmTest') -or
+            ([Win]::FindChild($form, 'TButton', 'OK') -ne [IntPtr]::Zero))) { return @($proc, $form) }
         Start-Sleep -Milliseconds 100
     }
     $proc.Kill()
@@ -480,8 +482,7 @@ $fmxVariants = @(
     # 280 is tried first and refuses the 270 target
     @{ Dir = 'fmx-270-x86-nopkg'; Arch = 'x86'; Title = 'VclSpy FMX Test 34 x86 static'; Inspector = 'VclSpyInspectFmxNoPkg270.dll'; Memory = 'own, guarded' },
     @{ Dir = 'fmx-280-x86-sharemem'; Arch = 'x86'; Title = 'VclSpy FMX Test 35 x86 static ShareMem'; Inspector = 'VclSpyInspectFmxNoPkg280.dll'; Memory = 'borlndmm.dll' },
-    # The FMX inspectors can't finalize themselves before such an exe frees its memory: they guard their own
-    @{ Dir = 'fmx-280-x64-simplesharemem'; Arch = 'x64'; Title = 'VclSpy FMX Test 35 x64 static SimpleShareMem'; Inspector = 'VclSpyInspectFmxNoPkg280.dll'; Memory = 'own, guarded' }
+    @{ Dir = 'fmx-280-x64-simplesharemem'; Arch = 'x64'; Title = 'VclSpy FMX Test 35 x64 static SimpleShareMem'; Inspector = 'VclSpyInspectFmxNoPkg280.dll'; Memory = 'shared by the target' }
 )
 
 foreach ($v in $fmxVariants) {
@@ -632,6 +633,16 @@ foreach ($v in $fmxVariants) {
         Check 'set color by number' (SubProp $s 'Fill.Color').value '#FF112233'
         $e = SetProp $a $s 'Fill.Color' 'NoSuchColor'
         CheckLike 'bad color error' $e.error '*is not a color*'
+
+        if ($v.Memory -eq 'shared by the target') {
+            # The inspector must finalize itself before the exe frees the memory manager it
+            # shares: when the last window closes. A minimized FMX application hides its form,
+            # and may be closed so.
+            $m = FmxRequest $a $form @{ op = 'set'; address = $fa; property = 'WindowState'; value = 'wsMinimized' }
+            Check 'minimize' $m.ok $true
+            Start-Sleep -Milliseconds 300
+            Check 'request while minimized' (FmxRequest $a $form @{ op = 'get'; address = $fa }).ok $true
+        }
 
         Start-Sleep -Milliseconds 300
         Check 'target exited' $proc.HasExited $false

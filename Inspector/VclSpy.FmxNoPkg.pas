@@ -1,44 +1,46 @@
 unit VclSpy.FmxNoPkg;
 
-{ Part of the no-packages FMX inspectors only, the counterpart of VclSpy.NoPkg.
-  They are packages that contain the RTL themselves (no requires clause),
-  built with the extension dll; the hook stub calls their Initialize after
-  loading them.
+{ Part of the no-packages FMX inspectors only: their exports, the
+  counterpart of VclSpy.NoPkg. They are packages that contain the RTL
+  themselves (no requires clause), built with the extension dll.
 
-  Unlike the VCL's, FireMonkey's application window is not destroyed while an
-  exe ends (only when FMX runs in a DLL), so there is no moment before the
-  exe frees its memory at which the inspector could finalize itself. It is
-  never finalized, as when a VCL target ends without destroying its
-  application window: the process ends with it still loaded. VclSpyActive
-  tells the hook stub that it can always be called.
-
-  When it is unloaded at the very end of the process, it unregisters its
-  module, which touches the memory of its RTL. So unlike VclSpy.NoPkg it
-  doesn't export VclSpyFinalizesEarly: VclSpy.MemoryManager doesn't use a
-  memory manager that the exe shares (SimpleShareMem), which the exe frees
-  before, but guards its own. }
+  FireMonkey destroys no window of its own when an exe ends (only in a DLL),
+  so VclSpy.SelfFinalize finalizes them when the last visible window of the
+  target is hidden or destroyed. The inspector's calls are wrapped, so that
+  it isn't finalized while it runs. }
 
 interface
-
-uses
-  Winapi.Windows;
-
-function VclSpyActive: BOOL; stdcall;
 
 implementation
 
 uses
-  VclSpy.FmxInspector;
+  Winapi.Windows, VclSpy.FmxInspector, VclSpy.SelfFinalize;
+
+procedure Inspect(Wnd: HWND; X, Y: Integer; ReplyWnd: HWND); stdcall;
+begin
+  EnterCall;
+  try
+    VclSpyInspect(Wnd, X, Y, ReplyWnd);
+  finally
+    LeaveCall;
+  end;
+end;
+
+procedure Request(Wnd: HWND; Json: PAnsiChar; ReplyWnd: HWND); stdcall;
+begin
+  EnterCall;
+  try
+    VclSpyRequest(Wnd, Json, ReplyWnd);
+  finally
+    LeaveCall;
+  end;
+end;
 
 exports
-  VclSpyInspect,
-  VclSpyRequest,
+  Inspect name 'VclSpyInspect',
+  Request name 'VclSpyRequest',
   VclSpyProbe,
-  VclSpyActive;
-
-function VclSpyActive: BOOL; stdcall;
-begin
-  Result := True;
-end;
+  VclSpyActive,
+  VclSpyFinalizesEarly;
 
 end.

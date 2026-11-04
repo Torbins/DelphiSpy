@@ -160,8 +160,8 @@ begin
       @Active := GetProcAddress(Result, PChar(VclSpyActiveExport));
       if Assigned(Active) and Active then
         Exit;
-      SendError(ReplyWnd, 'The target is closing: its application window is gone, and the inspector ' +
-        'finalized itself.');
+      SendError(ReplyWnd, 'The target is closing: its application window is gone, or its last window ' +
+        'closed, and the inspector finalized itself.');
       Exit(0);
     end;
   end;
