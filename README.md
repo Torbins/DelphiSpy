@@ -1,6 +1,6 @@
 # VclSpy
 
-Inspect controls of a running Delphi VCL application that is built **with runtime packages**.
+Inspect, and change, controls of a running Delphi VCL application that is built **with runtime packages**.
 Drag the finder (crosshair) from VclSpy onto a control and release.
 VclSpy loads an inspector DLL into the target process. The DLL shares the target's `rtlNNN.bpl`/`vclNNN.bpl`, so it sees the target's real VCL objects.
 
@@ -8,10 +8,20 @@ Shown for the picked control:
 
 - **Name**, class and unit, and the module (exe/bpl) that defines the class
 - Owner path (`frmMain.fraHeader.btnSave`), parent path, and the owning form with its unit
-- Published properties, and **event handlers**, e.g. `OnClick = TfrmMain.btnSaveClick`. The handler is reported for the class that declares it (a base form, when forms inherit), with its unit.
+- Published properties, the `TControl`/`TWinControl` properties the class doesn't publish (`Caption`, `Color`, `Visible`, `TabOrder`...), and **event handlers**, e.g. `OnClick = TfrmMain.btnSaveClick`. The handler is reported for the class that declares it (a base form, when forms inherit), with its unit.
 - Bound action and its `OnExecute` handler, class hierarchy, raw JSON, and a history of picks
 
 Graphic controls (`TLabel`, `TSpeedButton`, `TImage`...) and disabled controls are found too. Delphi 10.4 (270) and 11 (280) targets are supported, both 32- and 64-bit.
+
+## Editing properties
+
+Double-click a property (or select it and press Enter, or **Edit...**) to change it in the target. Gray properties are read-only. **Refresh** (F5) reads the control again.
+
+- **Editable**: published properties of simple types: integers, characters, floats and dates, strings, enumerations (including `Boolean`), and sets. Colors (`clRed`, `$00BBGGRR`), cursors (`crHandPoint`) and shortcuts (`Ctrl+S`) take names.
+- Also the properties `TControl` and `TWinControl` declare public or protected, so classes that don't publish them still get them (column *Scope*): `Visible`, `Enabled`, `Align`, `Anchors`, `BiDiMode`, `ClientWidth`, `ClientHeight`, `ShowHint`, `StyleElements`, `StyleName`, `Caption`, `Text`, `Color`, `ParentColor`, `ParentFont`, `ParentShowHint`, `ParentBiDiMode`, `AutoSize`, `DragMode`, `DragKind`, `DragCursor`; for windowed controls also `TabOrder`, `TabStop`, `DoubleBuffered`, `ParentDoubleBuffered`, `Bevel*`, `BorderWidth`, `Ctl3D`, `ParentCtl3D`, `ParentBackground`, `ImeMode`, `ImeName`, and read-only `Showing`. The list is `RegisterExtraProps` in `Inspector\VclSpy.Properties.pas`.
+- **Not editable**: object properties (`Font`, `Margins`, `Items`...), events, variants, and `Name`. Renaming at run time breaks `FindComponent` lookups and the paths VclSpy shows.
+
+The editor offers names for enumerations, sets, colors and cursors. If the target refuses a value (not an integer, out of range, an exception from the setter), the editor opens again with the error.
 
 ## Build
 
@@ -43,6 +53,8 @@ Deploy the whole `bin` folder; VclSpy picks `x86` or `x64` by the target's bitne
 
 The inspector DLL stays loaded in the target after the first pick, because unloading package-based DLLs from a live app is risky. Later picks reuse it.
 
+Edits and refreshes run `VclSpyInject.exe --hwnd <h> --request -` with a JSON request on stdin. The injector copies it into an unnamed file mapping and duplicates the handle into the target, so it depends on no named object and no access rights. It then sends a request message through the same hook. The inspector finds the control by its address from the report, but only among live controls (the window tree of `<h>`, then every form), so a stale address is never dereferenced. It sets the property on the GUI thread and replies with a fresh report. The reply's `window.hwnd` is the control's current window, because some property changes recreate window handles.
+
 ## CLI / scripting
 
 ```bat
@@ -52,9 +64,18 @@ bin\VclSpy.exe --inspect 1715004 800 600                    :: open the UI and i
 
 Coordinates are physical screen pixels. The inspector maps them for DPI-unaware targets.
 
+Requests take `control.address` and `window.hwnd` from an earlier report. Values are text, as reports show them:
+
+```bat
+echo {"op":"set","address":"$02A41B20","property":"Caption","value":"Save all"} | bin\x86\VclSpyInject.exe --hwnd 1715004 --request -
+echo {"op":"get","address":"$02A41B20"} | bin\x86\VclSpyInject.exe --hwnd 1715004 --request -
+```
+
+`--request <file>` reads the request from a UTF-8 file instead. A `set` reply adds `"changed": {"property", "oldValue", "newValue"}`. Each property in a report has `kind`, `scope` and `editable`, and `control.types` lists the names of the editable enumeration, set, color and cursor types.
+
 ## Tests
 
-`Test\run-tests.ps1` starts the test targets (10.4/11 × x86/x64, plus one built without packages). It inspects their controls through the CLI and checks the JSON:
+`Test\run-tests.ps1` starts the test targets (10.4/11 × x86/x64, plus one built without packages). It inspects their controls through the CLI, edits some of their properties, and checks the JSON:
 
 ```bat
 powershell -ExecutionPolicy Bypass -File Test\run-tests.ps1
@@ -66,3 +87,5 @@ powershell -ExecutionPolicy Bypass -File Test\run-tests.ps1
 - Controls in modules linked **without** runtime packages (an exe or DLL with static VCL) are not visible to the shared VCL; VclSpy reports this.
 - Elevated targets need VclSpy to run as administrator.
 - Reading properties calls their getters inside the target. That is normally harmless, but it can create window handles that didn't exist yet.
+- Setting a property runs its setter, and whatever the target's code does then (`OnChange`, `OnResize`...), on the target's GUI thread. If that shows a modal dialog, the request times out after 5 seconds; the change still happens.
+- Values longer than 300 characters are cut off in reports. Editing such a value replaces all of it; the editor says so.

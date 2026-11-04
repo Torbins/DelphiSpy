@@ -9,10 +9,12 @@ library VclSpyInspect270;
 
 uses
   VclSpy.Protocol in '..\Common\VclSpy.Protocol.pas',
+  VclSpy.Properties in 'VclSpy.Properties.pas',
   VclSpy.Inspector in 'VclSpy.Inspector.pas';
 
 exports
-  VclSpyInspect;
+  VclSpyInspect,
+  VclSpyRequest;
 
 begin
 end.

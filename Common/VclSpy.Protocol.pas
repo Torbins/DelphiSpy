@@ -11,6 +11,10 @@ uses
 
 const
   VclSpyQueryMessageName = 'VclSpy.Query.v1';
+  // WParam: reply window. LParam: a handle, valid in the target, to a file
+  // mapping that holds the request as null-terminated UTF-8 JSON. The hook
+  // stub closes the handle.
+  VclSpyRequestMessageName = 'VclSpy.Request.v1';
   VclSpyCopyDataMagic = $31535356; // 'VSS1'
   VclSpyReplyTimeout = 5000;
 
@@ -18,6 +22,7 @@ const
   VclSpyHookExport = 'VclSpyCallWndProc';
   VclSpyInspectDllPrefix = 'VclSpyInspect';
   VclSpyInspectExport = 'VclSpyInspect';
+  VclSpyRequestExport = 'VclSpyRequest';
   VclSpyInjectExeName = 'VclSpyInject.exe';
 
   // BPL suffixes of the Delphi versions the hook stub looks for, newest first.
@@ -27,6 +32,8 @@ const
 type
   // Exported by the inspector DLLs. X and Y are physical screen coordinates.
   TVclSpyInspectProc = procedure(Wnd: HWND; X, Y: Integer; ReplyWnd: HWND); stdcall;
+  // Exported by the inspector DLLs. Request is null-terminated UTF-8 JSON.
+  TVclSpyRequestProc = procedure(Wnd: HWND; Request: PAnsiChar; ReplyWnd: HWND); stdcall;
 
 function PackPoint(X, Y: Integer): LPARAM;
 procedure UnpackPoint(Value: LPARAM; out X, Y: Integer);

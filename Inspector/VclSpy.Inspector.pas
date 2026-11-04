@@ -3,7 +3,13 @@ unit VclSpy.Inspector;
 { Runs inside the target process, on the GUI thread that owns the picked
   window. The inspector DLLs are linked with the rtl and vcl runtime packages
   only, so the VCL objects seen here are the target's own: FindControl works,
-  and Owner, Parent and RTTI can be walked directly. }
+  and Owner, Parent and RTTI can be walked directly.
+
+  Requests (VclSpyRequest) are JSON objects with "op" and "address", the
+  control.address of an earlier report. Op "get" re-reads the control; op
+  "set" also takes "property" and "value" (text, as reports show values).
+  Both reply with a fresh report of the control; "set" adds "changed" with
+  the old and new value. VclSpy.Properties decides what can be edited. }
 
 interface
 
@@ -11,13 +17,15 @@ uses
   Winapi.Windows;
 
 procedure VclSpyInspect(Wnd: HWND; X, Y: Integer; ReplyWnd: HWND); stdcall;
+procedure VclSpyRequest(Wnd: HWND; Request: PAnsiChar; ReplyWnd: HWND); stdcall;
 
 implementation
 
 uses
   Winapi.Messages, System.SysUtils, System.Classes, System.TypInfo, System.Variants,
-  System.JSON, Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.Menus,
-  VclSpy.Protocol;
+  System.JSON, System.Generics.Collections, System.Generics.Defaults,
+  Vcl.Graphics, Vcl.Controls, Vcl.Forms,
+  VclSpy.Protocol, VclSpy.Properties;
 
 type
   TControlAccess = class(TControl);
@@ -200,38 +208,26 @@ begin
     Result := '(' + Obj.ClassName + ')';
 end;
 
+// The full value; PropJson shortens it for the report
 function PropValueText(Instance: TObject; Prop: PPropInfo): string;
 var
-  TypeName: string;
+  Info: PTypeInfo;
 begin
-  TypeName := GetTypeName(Prop^.PropType^);
-  case Prop^.PropType^.Kind of
-    tkInteger:
-      if SameText(TypeName, 'TColor') then
-        Result := ColorToString(TColor(GetOrdProp(Instance, Prop)))
-      else if SameText(TypeName, 'TCursor') then
-        Result := CursorToString(TCursor(GetOrdProp(Instance, Prop)))
-      else if SameText(TypeName, 'TShortCut') then
-        Result := ShortCutToText(TShortCut(GetOrdProp(Instance, Prop)))
-      else
-        Result := IntToStr(GetOrdProp(Instance, Prop));
-    tkChar, tkWChar:
-      Result := '#' + IntToStr(GetOrdProp(Instance, Prop));
-    tkEnumeration:
-      Result := GetEnumProp(Instance, Prop);
-    tkSet:
-      Result := GetSetProp(Instance, Prop, True);
+  Info := Prop^.PropType^;
+  case Info^.Kind of
+    tkInteger, tkChar, tkWChar, tkEnumeration, tkSet:
+      Result := OrdToText(Info, GetOrdProp(Instance, Prop));
     tkInt64:
       Result := IntToStr(GetInt64Prop(Instance, Prop));
     tkFloat:
-      if SameText(TypeName, 'TDateTime') or SameText(TypeName, 'TDate') or SameText(TypeName, 'TTime') then
+      if IsDateTimeType(Info) then
         Result := DateTimeToStr(GetFloatProp(Instance, Prop))
       else
         Result := FloatToStr(GetFloatProp(Instance, Prop));
     tkString, tkLString, tkWString, tkUString:
-      Result := Shorten(GetStrProp(Instance, Prop));
+      Result := GetStrProp(Instance, Prop);
     tkVariant:
-      Result := Shorten(VarToStr(GetVariantProp(Instance, Prop)));
+      Result := VarToStr(GetVariantProp(Instance, Prop));
     tkClass:
       Result := ObjectSummary(GetObjectProp(Instance, Prop));
     tkInterface:
@@ -242,6 +238,21 @@ begin
   else
     Result := '';
   end;
+end;
+
+// Full value of a published or extra property
+function PropertyText(Ctrl: TControl; const Name: string): string;
+var
+  Prop: PPropInfo;
+  Extra: TExtraProp;
+begin
+  Prop := GetPropInfo(Ctrl, Name);
+  if (Prop <> nil) and (Prop^.GetProc <> nil) then
+    Result := PropValueText(Ctrl, Prop)
+  else if FindExtraProp(Ctrl, Name, Extra) then
+    Result := Extra.ValueText(Ctrl)
+  else
+    raise EConvertError.CreateFmt('%s has no property %s.', [Ctrl.ClassName, Name]);
 end;
 
 { Event handlers }
@@ -290,13 +301,44 @@ end;
 
 { Sections }
 
-procedure AddProperties(Target: TJSONObject; Instance: TObject);
+function PropJson(const Name: string; Info: PTypeInfo; const Value, Scope: string;
+  Editable: Boolean; Types: TJSONObject): TJSONObject;
+var
+  Values: TJSONArray;
+  TypeName: string;
+begin
+  TypeName := GetTypeName(Info);
+  Result := TJSONObject.Create;
+  AddStr(Result, 'name', Name);
+  AddStr(Result, 'type', TypeName);
+  AddStr(Result, 'kind', KindName(Info));
+  AddStr(Result, 'value', Shorten(Value));
+  if Length(Value) > MaxValueLength then
+    AddBool(Result, 'truncated', True);
+  AddStr(Result, 'scope', Scope);
+  AddBool(Result, 'editable', Editable);
+  // Names for VclSpy's editor, once per type
+  if Editable and (Types.GetValue(TypeName) = nil) then
+  begin
+    Values := TypeValuesJson(Info);
+    if Values <> nil then
+      Types.AddPair(TypeName, Values);
+  end;
+end;
+
+// Published properties, and the TControl/TWinControl properties the class
+// doesn't publish, sorted by name. "types" lists the names that editable
+// enumeration, set, color and cursor types accept.
+procedure AddProperties(Target: TJSONObject; Ctrl: TControl);
 var
   Count, I: Integer;
   List: PPropList;
   Prop: PPropInfo;
   Props, Events: TJSONArray;
+  Types: TJSONObject;
+  Items: TList<TJSONObject>;
   Item: TJSONObject;
+  Extra: TExtraProp;
   Method: TMethod;
   Value: string;
 begin
@@ -304,37 +346,60 @@ begin
   Target.AddPair('properties', Props);
   Events := TJSONArray.Create;
   Target.AddPair('events', Events);
+  Types := TJSONObject.Create;
+  Target.AddPair('types', Types);
 
-  Count := GetPropList(PTypeInfo(Instance.ClassInfo), tkAny, nil);
-  GetMem(List, Count * SizeOf(PPropInfo));
+  Items := TList<TJSONObject>.Create;
   try
-    GetPropList(PTypeInfo(Instance.ClassInfo), tkAny, List, True);
-    for I := 0 to Count - 1 do
-    begin
-      Prop := List^[I];
-      if Prop^.GetProc = nil then
-        Continue; // write-only
-      if Prop^.PropType^.Kind = tkMethod then
+    Count := GetPropList(PTypeInfo(Ctrl.ClassInfo), tkAny, nil);
+    GetMem(List, Count * SizeOf(PPropInfo));
+    try
+      GetPropList(PTypeInfo(Ctrl.ClassInfo), tkAny, List, True);
+      for I := 0 to Count - 1 do
       begin
-        Method := GetMethodProp(Instance, Prop);
-        if Method.Code <> nil then
-          Events.AddElement(HandlerJson(GetPropName(Prop), Method));
-        Continue;
+        Prop := List^[I];
+        if Prop^.GetProc = nil then
+          Continue; // write-only
+        if Prop^.PropType^.Kind = tkMethod then
+        begin
+          Method := GetMethodProp(Ctrl, Prop);
+          if Method.Code <> nil then
+            Events.AddElement(HandlerJson(GetPropName(Prop), Method));
+          Continue;
+        end;
+        try
+          Value := PropValueText(Ctrl, Prop);
+        except
+          on E: Exception do
+            Value := '<error: ' + E.Message + '>';
+        end;
+        Items.Add(PropJson(GetPropName(Prop), Prop^.PropType^, Value, 'published',
+          IsEditablePublished(Prop), Types));
       end;
+    finally
+      FreeMem(List);
+    end;
+
+    for Extra in ExtraPropsOf(Ctrl) do
+    begin
       try
-        Value := PropValueText(Instance, Prop);
+        Value := Extra.ValueText(Ctrl);
       except
         on E: Exception do
           Value := '<error: ' + E.Message + '>';
       end;
-      Item := TJSONObject.Create;
-      AddStr(Item, 'name', GetPropName(Prop));
-      AddStr(Item, 'type', GetTypeName(Prop^.PropType^));
-      AddStr(Item, 'value', Value);
-      Props.AddElement(Item);
+      Items.Add(PropJson(Extra.Name, Extra.Info, Value, Extra.Scope, Extra.IsEditable, Types));
     end;
+
+    Items.Sort(TComparer<TJSONObject>.Construct(
+      function(const L, R: TJSONObject): Integer
+      begin
+        Result := CompareText(L.GetValue<string>('name'), R.GetValue<string>('name'));
+      end));
+    for Item in Items do
+      Props.AddElement(Item);
   finally
-    FreeMem(List);
+    Items.Free;
   end;
 end;
 
@@ -440,6 +505,8 @@ begin
   AddStr(Result, 'className', Ctrl.ClassName);
   AddStr(Result, 'unitName', Ctrl.UnitName);
   AddStr(Result, 'module', ModulePath(FindClassHInstance(Ctrl.ClassType)));
+  // Identifies the control in requests
+  AddStr(Result, 'address', Format('$%p', [Pointer(Ctrl)]));
   AddStr(Result, 'path', ComponentPath(Ctrl));
   AddStr(Result, 'parentPath', ParentPath(Ctrl));
   AddStr(Result, 'text', Shorten(TControlAccess(Ctrl).Text));
@@ -491,6 +558,40 @@ begin
   AddStr(Result, 'exStyle', Format('$%.8x', [GetWindowLong(Wnd, GWL_EXSTYLE)]));
 end;
 
+// Linked statically instead of through vclNNN.bpl, this DLL would see its own VCL
+function CheckPackages(out Error: string): Boolean;
+begin
+  Result := FindClassHInstance(TControl) <> HInstance;
+  if not Result then
+    Error := ErrorReport('This inspector DLL was built without the rtl;vcl runtime packages.');
+end;
+
+// Wnd is reported as "window": a window on the thread that owns Ctrl, for
+// VclSpy to send requests to
+function NewReport(Ctrl: TControl; Wnd: HWND): TJSONObject;
+var
+  Mapping: TDpiMapping;
+  Process: TJSONObject;
+begin
+  Mapping.Init(GetAncestor(Wnd, GA_ROOT));
+  Result := TJSONObject.Create;
+  try
+    AddBool(Result, 'ok', True);
+    AddStr(Result, 'inspector', Format('%s (Delphi %.1f, %s)', [ExtractFileName(ModulePath(HInstance)),
+      CompilerVersion, {$IFDEF WIN64}'Win64'{$ELSE}'Win32'{$ENDIF}]));
+    Process := TJSONObject.Create;
+    AddInt(Process, 'pid', GetCurrentProcessId);
+    AddStr(Process, 'exe', ParamStr(0));
+    AddStr(Process, 'vclPackage', ClassModuleName(TControl));
+    Result.AddPair('process', Process);
+    Result.AddPair('window', WindowJson(Wnd));
+    Result.AddPair('control', ControlJson(Ctrl, Mapping));
+  except
+    Result.Free;
+    raise;
+  end;
+end;
+
 function BuildReport(Wnd: HWND; const ScreenPt: TPoint): string;
 var
   Mapping: TDpiMapping;
@@ -498,11 +599,10 @@ var
   W: HWND;
   Found: TWinControl;
   Ctrl, Child: TControl;
-  Report, Process: TJSONObject;
+  Report: TJSONObject;
 begin
-  // Linked statically instead of through vclNNN.bpl, this DLL would see its own VCL
-  if FindClassHInstance(TControl) = HInstance then
-    Exit(ErrorReport('This inspector DLL was built without the rtl;vcl runtime packages.'));
+  if not CheckPackages(Result) then
+    Exit;
 
   Mapping.Init(GetAncestor(Wnd, GA_ROOT));
   LogicalPt := Mapping.ToLogical(ScreenPt);
@@ -528,23 +628,138 @@ begin
   if Child <> nil then
     Ctrl := Child;
 
-  Report := TJSONObject.Create;
+  Report := NewReport(Ctrl, Wnd);
   try
-    AddBool(Report, 'ok', True);
-    AddStr(Report, 'inspector', Format('%s (Delphi %.1f, %s)', [ExtractFileName(ModulePath(HInstance)),
-      CompilerVersion, {$IFDEF WIN64}'Win64'{$ELSE}'Win32'{$ENDIF}]));
-    Process := TJSONObject.Create;
-    AddInt(Process, 'pid', GetCurrentProcessId);
-    AddStr(Process, 'exe', ParamStr(0));
-    AddStr(Process, 'vclPackage', ClassModuleName(TControl));
-    Report.AddPair('process', Process);
-    Report.AddPair('window', WindowJson(Wnd));
     if Ctrl <> Found then
       AddStr(Report, 'resolvedFrom', ComponentPath(Found));
-    Report.AddPair('control', ControlJson(Ctrl, Mapping));
     Result := Report.ToJSON;
   finally
     Report.Free;
+  end;
+end;
+
+{ Requests }
+
+// Finds the control at Address among the live controls, so that an address
+// from an old report is never dereferenced. Searches the window tree the
+// request was sent to first, then every form.
+function FindLiveControl(Address: Pointer; Wnd: HWND): TControl;
+
+  function Search(Root: TControl): TControl;
+  var
+    I: Integer;
+  begin
+    if Pointer(Root) = Address then
+      Exit(Root);
+    if Root is TWinControl then
+      for I := 0 to TWinControl(Root).ControlCount - 1 do
+      begin
+        Result := Search(TWinControl(Root).Controls[I]);
+        if Result <> nil then
+          Exit;
+      end;
+    Result := nil;
+  end;
+
+var
+  Root: TControl;
+  I: Integer;
+begin
+  Root := nil;
+  while (Wnd <> 0) and (Root = nil) do
+  begin
+    Root := FindControl(Wnd);
+    Wnd := GetParent(Wnd);
+  end;
+  if Root <> nil then
+  begin
+    while Root.Parent <> nil do
+      Root := Root.Parent;
+    Result := Search(Root);
+    if Result <> nil then
+      Exit;
+  end;
+  for I := 0 to Screen.CustomFormCount - 1 do
+  begin
+    Result := Search(Screen.CustomForms[I]);
+    if Result <> nil then
+      Exit;
+  end;
+  Result := nil;
+end;
+
+// The control's own window, or its nearest windowed parent's. Setting some
+// properties recreates windows, so the window the request came to may be gone.
+function ControlWindow(Ctrl: TControl; Fallback: HWND): HWND;
+begin
+  while Ctrl <> nil do
+  begin
+    if (Ctrl is TWinControl) and TWinControl(Ctrl).HandleAllocated then
+      Exit(TWinControl(Ctrl).Handle);
+    Ctrl := Ctrl.Parent;
+  end;
+  Result := Fallback;
+end;
+
+function HandleRequest(Wnd: HWND; const RequestJson: string): string;
+var
+  Value: TJSONValue;
+  Request, Report, Changed: TJSONObject;
+  Op, Name, Text, OldText: string;
+  Address: UInt64;
+  Ctrl: TControl;
+begin
+  if not CheckPackages(Result) then
+    Exit;
+
+  Value := TJSONObject.ParseJSONValue(RequestJson);
+  Changed := nil;
+  try
+    if not (Value is TJSONObject) then
+      Exit(ErrorReport('The request is not a JSON object.'));
+    Request := TJSONObject(Value);
+    Op := Request.GetValue<string>('op', '');
+    if not SameText(Op, 'get') and not SameText(Op, 'set') then
+      Exit(ErrorReport(Format('Unknown request op "%s"; use "get" or "set".', [Op])));
+    if not TryStrToUInt64(Request.GetValue<string>('address', ''), Address) then
+      Exit(ErrorReport('The request needs "address", the control.address of a report.'));
+
+    Ctrl := FindLiveControl(Pointer(NativeUInt(Address)), Wnd);
+    if Ctrl = nil then
+      Exit(ErrorReport('The control no longer exists (it may have been destroyed). Pick it again.'));
+
+    if SameText(Op, 'set') then
+    begin
+      Name := Request.GetValue<string>('property', '');
+      if not Request.TryGetValue<string>('value', Text) then
+        Exit(ErrorReport('The request needs "value".'));
+      try
+        OldText := PropertyText(Ctrl, Name);
+        SetPropertyText(Ctrl, Name, Text);
+      except
+        on E: Exception do
+          Exit(ErrorReport(Format('Cannot set %s: %s', [Name, E.Message])));
+      end;
+      Changed := TJSONObject.Create;
+      AddStr(Changed, 'property', Name);
+      AddStr(Changed, 'oldValue', Shorten(OldText));
+      AddStr(Changed, 'newValue', Shorten(PropertyText(Ctrl, Name)));
+    end;
+
+    Report := NewReport(Ctrl, ControlWindow(Ctrl, Wnd));
+    try
+      if Changed <> nil then
+      begin
+        Report.AddPair('changed', Changed);
+        Changed := nil;
+      end;
+      Result := Report.ToJSON;
+    finally
+      Report.Free;
+    end;
+  finally
+    Changed.Free;
+    Value.Free;
   end;
 end;
 
@@ -573,6 +788,24 @@ begin
       Json := ErrorReport(E.ClassName + ': ' + E.Message);
   else
     Json := ErrorReport('Unknown exception while inspecting the control.');
+  end;
+  SendReply(ReplyWnd, Json);
+end;
+
+procedure VclSpyRequest(Wnd: HWND; Request: PAnsiChar; ReplyWnd: HWND); stdcall;
+var
+  Json, Text: string;
+begin
+  try
+    Text := UTF8ToString(Request);
+    if (Text <> '') and (Text[1] = #$FEFF) then
+      Delete(Text, 1, 1); // BOM of a request file
+    Json := HandleRequest(Wnd, Text);
+  except
+    on E: Exception do
+      Json := ErrorReport(E.ClassName + ': ' + E.Message);
+  else
+    Json := ErrorReport('Unknown exception while handling the request.');
   end;
   SendReply(ReplyWnd, Json);
 end;

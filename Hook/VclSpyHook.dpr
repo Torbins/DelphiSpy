@@ -2,8 +2,9 @@ library VclSpyHook;
 
 { Hook stub that SetWindowsHookEx loads into the target process. It is built
   without runtime packages and without SysUtils, so it can load into any
-  process. On a VclSpy query it loads the inspector DLL that matches the
-  target's VCL package version and calls it on the target's GUI thread. }
+  process. On a VclSpy query or request it loads the inspector DLL that
+  matches the target's VCL package version and calls it on the target's GUI
+  thread. }
 
 uses
   Winapi.Windows,
@@ -11,7 +12,7 @@ uses
   VclSpy.Protocol in '..\Common\VclSpy.Protocol.pas';
 
 var
-  QueryMsg: UINT;
+  QueryMsg, RequestMsg: UINT;
 
 function IntToStr(Value: Integer): string;
 var
@@ -74,14 +75,15 @@ begin
   Result := '';
 end;
 
-procedure HandleQuery(Wnd, ReplyWnd: HWND; Point: LPARAM);
+// Loads the inspector DLL that matches the target's VCL package version and
+// returns the address of one of its exports, or nil after sending an error.
+function InspectorProc(ReplyWnd: HWND; const ExportName: string): Pointer;
 var
   Suffix, Path: string;
   Lib: HMODULE;
   Err: DWORD;
-  Inspect: TVclSpyInspectProc;
-  X, Y: Integer;
 begin
+  Result := nil;
   Suffix := FindLoadedPackage('vcl');
   if Suffix = '' then
   begin
@@ -111,15 +113,48 @@ begin
     Exit;
   end;
 
-  @Inspect := GetProcAddress(Lib, VclSpyInspectExport);
-  if not Assigned(Inspect) then
-  begin
-    SendError(ReplyWnd, Path + ' does not export ' + VclSpyInspectExport + '.');
-    Exit;
-  end;
+  Result := GetProcAddress(Lib, PChar(ExportName));
+  if Result = nil then
+    // An older inspector stays loaded until the target restarts
+    SendError(ReplyWnd, Path + ' does not export ' + ExportName + '. If VclSpy was updated ' +
+      'while the target was running, restart the target.');
+end;
 
-  UnpackPoint(Point, X, Y);
-  Inspect(Wnd, X, Y, ReplyWnd);
+procedure HandleQuery(Wnd, ReplyWnd: HWND; Point: LPARAM);
+var
+  Inspect: TVclSpyInspectProc;
+  X, Y: Integer;
+begin
+  @Inspect := InspectorProc(ReplyWnd, VclSpyInspectExport);
+  if Assigned(Inspect) then
+  begin
+    UnpackPoint(Point, X, Y);
+    Inspect(Wnd, X, Y, ReplyWnd);
+  end;
+end;
+
+procedure HandleRequest(Wnd, ReplyWnd: HWND; Mapping: THandle);
+var
+  View: Pointer;
+  Request: TVclSpyRequestProc;
+begin
+  try
+    View := MapViewOfFile(Mapping, FILE_MAP_READ, 0, 0, 0);
+    if View = nil then
+    begin
+      SendError(ReplyWnd, 'Cannot read the request (error ' + IntToStr(GetLastError) + ').');
+      Exit;
+    end;
+    try
+      @Request := InspectorProc(ReplyWnd, VclSpyRequestExport);
+      if Assigned(Request) then
+        Request(Wnd, PAnsiChar(View), ReplyWnd);
+    finally
+      UnmapViewOfFile(View);
+    end;
+  finally
+    CloseHandle(Mapping);
+  end;
 end;
 
 function CallWndProcHook(Code: Integer; WParam: WPARAM; LParam: LPARAM): LRESULT; stdcall;
@@ -129,11 +164,17 @@ begin
   if Code = HC_ACTION then
   begin
     if QueryMsg = 0 then
+    begin
       QueryMsg := RegisterWindowMessage(VclSpyQueryMessageName);
+      RequestMsg := RegisterWindowMessage(VclSpyRequestMessageName);
+    end;
     Msg := PCWPStruct(LParam);
-    if (Msg^.message = QueryMsg) and (Msg^.wParam <> 0) then
+    if (Msg^.wParam <> 0) and ((Msg^.message = QueryMsg) or (Msg^.message = RequestMsg)) then
       try
-        HandleQuery(Msg^.hwnd, HWND(Msg^.wParam), Msg^.lParam);
+        if Msg^.message = QueryMsg then
+          HandleQuery(Msg^.hwnd, HWND(Msg^.wParam), Msg^.lParam)
+        else
+          HandleRequest(Msg^.hwnd, HWND(Msg^.wParam), THandle(Msg^.lParam));
       except
         // Never let anything escape into the target's message dispatch
       end;

@@ -12,10 +12,12 @@ object frmMain: TfrmMain
   Font.Height = -12
   Font.Name = 'Segoe UI'
   Font.Style = []
+  KeyPreview = True
   Position = poScreenCenter
   ShowHint = True
   OnCreate = FormCreate
   OnDestroy = FormDestroy
+  OnKeyDown = FormKeyDown
   PixelsPerInch = 96
   TextHeight = 15
   object pnlTop: TPanel
@@ -236,21 +238,67 @@ object frmMain: TfrmMain
     TabOrder = 2
     object tabProperties: TTabSheet
       Caption = 'Properties'
-      object edtFilter: TEdit
+      object pnlPropTools: TPanel
         Left = 0
         Top = 0
         Width = 752
-        Height = 23
+        Height = 25
         Align = alTop
+        BevelOuter = bvNone
         TabOrder = 0
-        TextHint = 'Filter by property name or value'
-        OnChange = edtFilterChange
+        object edtFilter: TEdit
+          Left = 0
+          Top = 0
+          Width = 584
+          Height = 25
+          Align = alClient
+          TabOrder = 0
+          TextHint = 'Filter by property name or value'
+          OnChange = edtFilterChange
+        end
+        object btnEdit: TButton
+          Left = 588
+          Top = 0
+          Width = 80
+          Height = 25
+          Hint = 'Change the selected property in the target (double-click or Enter)'
+          AlignWithMargins = True
+          Margins.Left = 4
+          Margins.Top = 0
+          Margins.Right = 0
+          Margins.Bottom = 0
+          Align = alRight
+          Caption = 'Edit...'
+          Enabled = False
+          TabOrder = 1
+          OnClick = btnEditClick
+        end
+        object btnRefresh: TButton
+          Left = 672
+          Top = 0
+          Width = 80
+          Height = 25
+          Hint = 'Read the control again (F5)'
+          AlignWithMargins = True
+          Margins.Left = 4
+          Margins.Top = 0
+          Margins.Right = 0
+          Margins.Bottom = 0
+          Align = alRight
+          Caption = 'Refresh'
+          Enabled = False
+          TabOrder = 2
+          OnClick = btnRefreshClick
+        end
       end
       object lvProperties: TListView
         Left = 0
-        Top = 23
+        Top = 25
         Width = 752
-        Height = 276
+        Height = 274
+        Hint =
+          'Gray properties are read-only. Double-click a property to chang' +
+          'e it in the target.'
         Align = alClient
         Columns = <
           item
@@ -259,16 +307,24 @@ object frmMain: TfrmMain
           end
           item
             Caption = 'Value'
-            Width = 400
+            Width = 330
           end
           item
             Caption = 'Type'
-            Width = 140
+            Width = 130
+          end
+          item
+            Caption = 'Scope'
+            Width = 80
           end>
         ReadOnly = True
         RowSelect = True
         TabOrder = 1
         ViewStyle = vsReport
+        OnCustomDrawItem = lvPropertiesCustomDrawItem
+        OnDblClick = lvPropertiesDblClick
+        OnKeyDown = lvPropertiesKeyDown
+        OnSelectItem = lvPropertiesSelectItem
       end
     end
     object tabEvents: TTabSheet

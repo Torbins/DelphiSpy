@@ -63,6 +63,22 @@ function Inspect($Arch, [IntPtr]$Wnd) {
     return ($out -join '') | ConvertFrom-Json
 }
 
+# Sends a get/set request for the control of an earlier report, through stdin
+function Request($Arch, $Report, [hashtable]$Body) {
+    $Body.address = $Report.control.address
+    $out = ($Body | ConvertTo-Json -Compress) |
+        & "$Root\bin\$Arch\VclSpyInject.exe" --hwnd $Report.window.hwnd --request -
+    return ($out -join '') | ConvertFrom-Json
+}
+
+function SetProp($Arch, $Report, $Name, $Value) {
+    return Request $Arch $Report @{ op = 'set'; property = $Name; value = $Value }
+}
+
+function Prop($Report, $Name) {
+    return $Report.control.properties | Where-Object name -eq $Name
+}
+
 function Child([IntPtr]$Parent, $Cls, $Text) {
     # PowerShell would pass $null to a string parameter as ''
     if ($null -eq $Text) { $Text = [NullString]::Value }
@@ -134,6 +150,70 @@ foreach ($v in $variants) {
         $r = Inspect $other $ok
         Check 'wrong-bitness injector ok' $r.ok $false
         CheckLike 'wrong-bitness injector error' $r.error "*use $($v.Arch)\VclSpyInject.exe*"
+
+        # Editing
+        $r = Inspect $v.Arch $ok
+        Check 'Caption scope' (Prop $r 'Caption').scope 'published'
+        Check 'Caption editable' (Prop $r 'Caption').editable $true
+        Check 'Text scope (TControl, protected)' (Prop $r 'Text').scope 'protected'
+        Check 'ClientWidth scope (TControl, public)' (Prop $r 'ClientWidth').scope 'public'
+        Check 'Showing editable' (Prop $r 'Showing').editable $false
+        Check 'Name editable' (Prop $r 'Name').editable $false
+        Check 'Align values' ($r.control.types.TAlign -join ',') 'alNone,alTop,alBottom,alLeft,alRight,alClient,alCustom'
+
+        $s = SetProp $v.Arch $r 'Caption' 'Changed'
+        Check 'set Caption ok' $s.ok $true
+        Check 'set Caption old value' $s.changed.oldValue 'OK'
+        Check 'set Caption new value' $s.changed.newValue 'Changed'
+        Check 'set Caption text' $s.control.text 'Changed'
+        Check 'set Caption window text' ([Win]::FindChild($form, 'TButton', 'Changed') -eq $ok) $true
+
+        $s = SetProp $v.Arch $s 'Text' 'Via Text'
+        Check 'set protected Text' ([Win]::FindChild($form, 'TButton', 'Via Text') -eq $ok) $true
+        $s = SetProp $v.Arch $s 'ClientWidth' '120'
+        Check 'set public ClientWidth' $s.control.bounds.width 120
+        $s = SetProp $v.Arch $s 'Width' ' 110 '
+        Check 'set Width' $s.control.bounds.width 110
+        $s = SetProp $v.Arch $s 'Anchors' '[akLeft,akBottom]'
+        Check 'set Anchors' (Prop $s 'Anchors').value '[akLeft,akBottom]'
+        $s = SetProp $v.Arch $s 'Enabled' 'false'
+        Check 'set Enabled' (Prop $s 'Enabled').value 'False'
+        $s = SetProp $v.Arch $s 'Enabled' 'True'
+
+        $e = SetProp $v.Arch $s 'Width' 'abc'
+        Check 'bad integer ok' $e.ok $false
+        CheckLike 'bad integer error' $e.error '*"abc" is not an integer*'
+        $e = SetProp $v.Arch $s 'Align' 'alMiddle'
+        CheckLike 'bad enum error' $e.error '*Use one of: alNone, alTop*'
+        $e = SetProp $v.Arch $s 'Anchors' '[akLeft,akMiddle]'
+        CheckLike 'bad set error' $e.error '*not a TAnchors value*'
+        $e = SetProp $v.Arch $s 'Name' 'btnOther'
+        CheckLike 'Name error' $e.error '*cannot be edited*'
+        $e = SetProp $v.Arch $s 'Showing' 'False'
+        CheckLike 'read-only error' $e.error '*read-only*'
+        $e = SetProp $v.Arch $s 'NoSuchProperty' '1'
+        CheckLike 'unknown property error' $e.error '*has no property NoSuchProperty*'
+
+        $g = Request $v.Arch $s @{ op = 'get' }
+        Check 'get ok' $g.ok $true
+        Check 'get width' $g.control.bounds.width 110
+        $stale = [pscustomobject]@{ window = $s.window; control = [pscustomobject]@{ address = '$1' } }
+        $e = Request $v.Arch $stale @{ op = 'get' }
+        CheckLike 'stale address error' $e.error '*no longer exists*'
+
+        $s = SetProp $v.Arch $s 'Caption' 'OK'
+        Check 'restore Caption' $s.control.text 'OK'
+
+        # A graphic control: requests go to its parent's window
+        $r = Inspect $v.Arch (Child $form 'TPanel' 'LabelHost')
+        $s = SetProp $v.Arch $r 'Caption' 'Label changed'
+        Check 'set label Caption' $s.control.text 'Label changed'
+        $s = SetProp $v.Arch $s 'Color' 'clRed'
+        Check 'set label Color by name' (Prop $s 'Color').value 'clRed'
+        $s = SetProp $v.Arch $s 'Color' '$00112233'
+        Check 'set label Color by number' (Prop $s 'Color').value '$00112233'
+        $e = SetProp $v.Arch $s 'Color' 'clNoSuchColor'
+        CheckLike 'bad color error' $e.error '*is not a color*'
 
         Start-Sleep -Milliseconds 300
         Check 'target exited' $proc.HasExited $false

@@ -1,8 +1,9 @@
 unit VclSpy.Injector;
 
 { Gets VclSpyHook.dll into the process that owns a window and asks it to
-  inspect the control at a screen point. The caller must have the same
-  bitness as the target. That is why VclSpyInject.exe ships as x86 and x64. }
+  inspect the control at a screen point, or to carry out a JSON request
+  (read or change a property). The caller must have the same bitness as the
+  target. That is why VclSpyInject.exe ships as x86 and x64. }
 
 interface
 
@@ -11,6 +12,10 @@ uses
 
 // Returns the inspector's UTF-8 JSON reply, or an {"ok":false,...} error object.
 function InjectAndQuery(Wnd: HWND; X, Y: Integer; Timeout: Cardinal): RawByteString;
+
+// Sends a UTF-8 JSON request to the inspector on the thread that owns Wnd and
+// returns its UTF-8 JSON reply, or an {"ok":false,...} error object.
+function InjectAndRequest(Wnd: HWND; const Request: RawByteString; Timeout: Cardinal): RawByteString;
 
 function ErrorJson(const Msg: string): RawByteString;
 
@@ -106,24 +111,36 @@ begin
       Message := 'The target is a 64-bit process; use x64\' + VclSpyInjectExeName + '.';
 end;
 
-function InjectAndQuery(Wnd: HWND; X, Y: Integer; Timeout: Cardinal): RawByteString;
+// Checks that Wnd belongs to another process of our bitness
+function CheckTarget(Wnd: HWND; out Pid, Tid: DWORD): string;
+begin
+  Result := '';
+  if not IsWindow(Wnd) then
+    Exit(Format('Window $%x does not exist.', [NativeUInt(Wnd)]));
+  Tid := GetWindowThreadProcessId(Wnd, Pid);
+  if Pid = GetCurrentProcessId then
+    Exit('Cannot inspect a window of the injector itself.');
+  IsSameBitness(Pid, Result);
+end;
+
+type
+  // Called once the reply window exists, right before the message is sent
+  TMakeLParam = reference to function(ReplyWnd: HWND; out Value: LPARAM; out Error: string): Boolean;
+
+// Hooks the thread that owns Wnd and sends it Msg with the reply window in
+// WParam. The inspector answers with WM_COPYDATA while we wait.
+function Exchange(Wnd: HWND; Tid: DWORD; Msg: UINT; const MakeLParam: TMakeLParam;
+  Timeout: Cardinal): RawByteString;
 var
-  Pid, Tid, Err: DWORD;
+  Err: DWORD;
   HookLib: HMODULE;
   HookProc: Pointer;
   Hook: HHOOK;
   ReplyWnd: HWND;
   Res: DWORD_PTR;
-  Path, Msg: string;
+  Value: LPARAM;
+  Path, Error: string;
 begin
-  if not IsWindow(Wnd) then
-    Exit(ErrorJson(Format('Window $%x does not exist.', [NativeUInt(Wnd)])));
-  Tid := GetWindowThreadProcessId(Wnd, Pid);
-  if Pid = GetCurrentProcessId then
-    Exit(ErrorJson('Cannot inspect a window of the injector itself.'));
-  if not IsSameBitness(Pid, Msg) then
-    Exit(ErrorJson(Msg));
-
   Path := ExtractFilePath(ParamStr(0)) + VclSpyHookDllName;
   HookLib := LoadLibrary(PChar(Path));
   if HookLib = 0 then
@@ -135,6 +152,8 @@ begin
 
     ReplyWnd := CreateReplyWindow;
     try
+      if not MakeLParam(ReplyWnd, Value, Error) then
+        Exit(ErrorJson(Error));
       Hook := SetWindowsHookEx(WH_CALLWNDPROC, HookProc, HookLib, Tid);
       if Hook = 0 then
         Exit(ErrorJson('SetWindowsHookEx failed: ' + SysErrorMessage(GetLastError)));
@@ -143,8 +162,7 @@ begin
         ReplyReceived := False;
         // The inspector replies with WM_COPYDATA while we wait here; sent
         // messages to this thread are dispatched during SendMessageTimeout.
-        if SendMessageTimeout(Wnd, RegisterWindowMessage(VclSpyQueryMessageName),
-          WPARAM(ReplyWnd), PackPoint(X, Y), SMTO_NORMAL, Timeout, @Res) = 0 then
+        if SendMessageTimeout(Wnd, Msg, WPARAM(ReplyWnd), Value, SMTO_NORMAL, Timeout, @Res) = 0 then
         begin
           Err := GetLastError;
           if not ReplyReceived then
@@ -170,6 +188,76 @@ begin
     end;
   finally
     FreeLibrary(HookLib);
+  end;
+end;
+
+function InjectAndQuery(Wnd: HWND; X, Y: Integer; Timeout: Cardinal): RawByteString;
+var
+  Pid, Tid: DWORD;
+  Msg: string;
+begin
+  Msg := CheckTarget(Wnd, Pid, Tid);
+  if Msg <> '' then
+    Exit(ErrorJson(Msg));
+  Result := Exchange(Wnd, Tid, RegisterWindowMessage(VclSpyQueryMessageName),
+    function(ReplyWnd: HWND; out Value: LPARAM; out Error: string): Boolean
+    begin
+      Value := PackPoint(X, Y);
+      Result := True;
+    end, Timeout);
+end;
+
+function InjectAndRequest(Wnd: HWND; const Request: RawByteString; Timeout: Cardinal): RawByteString;
+var
+  Pid, Tid: DWORD;
+  Msg: string;
+  Mapping, Process: THandle;
+  View: Pointer;
+begin
+  Msg := CheckTarget(Wnd, Pid, Tid);
+  if Msg <> '' then
+    Exit(ErrorJson(Msg));
+
+  // An unnamed mapping, handed to the target with DuplicateHandle: no named
+  // object whose access rights would depend on elevation or integrity level
+  Mapping := CreateFileMapping(INVALID_HANDLE_VALUE, nil, PAGE_READWRITE, 0, Length(Request) + 1, nil);
+  if Mapping = 0 then
+    Exit(ErrorJson('CreateFileMapping failed: ' + SysErrorMessage(GetLastError)));
+  try
+    View := MapViewOfFile(Mapping, FILE_MAP_WRITE, 0, 0, 0);
+    if View = nil then
+      Exit(ErrorJson('MapViewOfFile failed: ' + SysErrorMessage(GetLastError)));
+    try
+      // The view is zero-filled, so the request ends with #0
+      if Request <> '' then
+        Move(Request[1], View^, Length(Request));
+    finally
+      UnmapViewOfFile(View);
+    end;
+
+    Process := OpenProcess(PROCESS_DUP_HANDLE, False, Pid);
+    if Process = 0 then
+      Exit(ErrorJson(Format('Cannot open process %d: %s', [Pid, SysErrorMessage(GetLastError)])));
+    try
+      Result := Exchange(Wnd, Tid, RegisterWindowMessage(VclSpyRequestMessageName),
+        function(ReplyWnd: HWND; out Value: LPARAM; out Error: string): Boolean
+        var
+          Remote: THandle;
+        begin
+          // The hook stub closes the duplicate. If the message never gets
+          // there, one handle leaks in the target; closing it from here could
+          // hit a reused handle value if the stub closed it late.
+          Result := DuplicateHandle(GetCurrentProcess, Mapping, Process, @Remote, FILE_MAP_READ, False, 0);
+          if Result then
+            Value := LPARAM(Remote)
+          else
+            Error := 'DuplicateHandle failed: ' + SysErrorMessage(GetLastError);
+        end, Timeout);
+    finally
+      CloseHandle(Process);
+    end;
+  finally
+    CloseHandle(Mapping);
   end;
 end;
 

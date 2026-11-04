@@ -35,7 +35,10 @@ type
     edtText: TEdit;
     pgcDetails: TPageControl;
     tabProperties: TTabSheet;
+    pnlPropTools: TPanel;
     edtFilter: TEdit;
+    btnEdit: TButton;
+    btnRefresh: TButton;
     lvProperties: TListView;
     tabEvents: TTabSheet;
     lvEvents: TListView;
@@ -55,6 +58,14 @@ type
     procedure edtFilterChange(Sender: TObject);
     procedure lbHistoryClick(Sender: TObject);
     procedure tmrFlashTimer(Sender: TObject);
+    procedure btnEditClick(Sender: TObject);
+    procedure btnRefreshClick(Sender: TObject);
+    procedure lvPropertiesDblClick(Sender: TObject);
+    procedure lvPropertiesKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+    procedure lvPropertiesSelectItem(Sender: TObject; Item: TListItem; Selected: Boolean);
+    procedure lvPropertiesCustomDrawItem(Sender: TCustomListView; Item: TListItem;
+      State: TCustomDrawState; var DefaultDraw: Boolean);
+    procedure FormKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
   private
     FFinder: TFinderTool;
     FFrame: THighlightFrame;
@@ -62,11 +73,21 @@ type
     FHoverWnd: HWND;
     FReport: TJSONObject;
     FHistoryJson: TStringList; // parallel to lbHistory.Items, newest first
+    // The edit in flight, to reopen the editor with it if the target refuses it
+    FEditName, FEditText: string;
+    FSelectedName: string; // reselected when the property list is filled again
     procedure FinderPickMove(Sender: TObject; Wnd: HWND; const ScreenPt: TPoint);
     procedure FinderPickDone(Sender: TObject; Wnd: HWND; const ScreenPt: TPoint);
     procedure FinderPickCancel(Sender: TObject);
     procedure RunnerDone(Sender: TObject);
+    procedure RequestDone(Sender: TObject);
     procedure StartInspection(Wnd: HWND; const ScreenPt: TPoint);
+    function StartRequest(Request: TJSONObject): Boolean;
+    function ReportOk: Boolean;
+    function SelectedProperty: TJSONObject;
+    function FindProperty(const Name: string): TJSONObject;
+    procedure EditProperty(Prop: TJSONObject; const Text, Error: string);
+    procedure UpdatePropertyButtons;
     procedure ShowReport(const Json: string; AddToHistory: Boolean);
     procedure ShowError(const Msg: string);
     procedure ShowInfo(const Msg: string);
@@ -85,7 +106,7 @@ implementation
 {$R *.dfm}
 
 uses
-  System.Generics.Collections, Vcl.Clipbrd;
+  System.Generics.Collections, System.UITypes, Vcl.Clipbrd, PropEditor;
 
 const
   MaxHistory = 30;
@@ -347,6 +368,7 @@ begin
   lvProperties.Items.Clear;
   lvEvents.Items.Clear;
   tvHierarchy.Items.Clear;
+  UpdatePropertyButtons;
 end;
 
 procedure TfrmMain.FillProperties;
@@ -355,30 +377,189 @@ var
   Element: TJSONValue;
   Prop: TJSONObject;
   Filter, Name, Value: string;
-  Item: TListItem;
+  Item, Selected: TListItem;
 begin
   Props := JArr(JObj(FReport, 'control'), 'properties');
   Filter := LowerCase(Trim(edtFilter.Text));
+  Selected := nil;
   lvProperties.Items.BeginUpdate;
   try
     lvProperties.Items.Clear;
-    if Props = nil then
-      Exit;
-    for Element in Props do
-    begin
-      Prop := Element as TJSONObject;
-      Name := JStr(Prop, 'name');
-      Value := JStr(Prop, 'value');
-      if (Filter <> '') and (Pos(Filter, LowerCase(Name + ' ' + Value)) = 0) then
-        Continue;
-      Item := lvProperties.Items.Add;
-      Item.Caption := Name;
-      Item.SubItems.Add(Value);
-      Item.SubItems.Add(JStr(Prop, 'type'));
-    end;
+    if Props <> nil then
+      for Element in Props do
+      begin
+        Prop := Element as TJSONObject;
+        Name := JStr(Prop, 'name');
+        Value := JStr(Prop, 'value');
+        if (Filter <> '') and (Pos(Filter, LowerCase(Name + ' ' + Value)) = 0) then
+          Continue;
+        Item := lvProperties.Items.Add;
+        Item.Caption := Name;
+        Item.SubItems.Add(Value);
+        Item.SubItems.Add(JStr(Prop, 'type'));
+        Item.SubItems.Add(JStr(Prop, 'scope'));
+        Item.Data := Prop; // owned by FReport, which outlives the list items
+        if SameText(Name, FSelectedName) then
+          Selected := Item;
+      end;
   finally
     lvProperties.Items.EndUpdate;
   end;
+  if Selected <> nil then
+  begin
+    Selected.Selected := True;
+    Selected.Focused := True;
+    Selected.MakeVisible(False);
+  end;
+  UpdatePropertyButtons;
+end;
+
+function TfrmMain.ReportOk: Boolean;
+begin
+  Result := (FReport <> nil) and FReport.GetValue<Boolean>('ok', False);
+end;
+
+function TfrmMain.SelectedProperty: TJSONObject;
+begin
+  if lvProperties.Selected = nil then
+    Result := nil
+  else
+    Result := TJSONObject(lvProperties.Selected.Data);
+end;
+
+function TfrmMain.FindProperty(const Name: string): TJSONObject;
+var
+  Element: TJSONValue;
+  Props: TJSONArray;
+begin
+  Props := JArr(JObj(FReport, 'control'), 'properties');
+  if Props <> nil then
+    for Element in Props do
+      if SameText(JStr(Element as TJSONObject, 'name'), Name) then
+        Exit(TJSONObject(Element));
+  Result := nil;
+end;
+
+procedure TfrmMain.UpdatePropertyButtons;
+var
+  Prop: TJSONObject;
+begin
+  Prop := SelectedProperty;
+  btnEdit.Enabled := (Prop <> nil) and Prop.GetValue<Boolean>('editable', False);
+  btnRefresh.Enabled := ReportOk;
+end;
+
+procedure TfrmMain.EditProperty(Prop: TJSONObject; const Text, Error: string);
+var
+  Info: TPropEditInfo;
+  NewText: string;
+  Request: TJSONObject;
+begin
+  if (Prop = nil) or not Prop.GetValue<Boolean>('editable', False) or (FRunner <> nil) then
+    Exit;
+  Info.Name := JStr(Prop, 'name');
+  Info.TypeName := JStr(Prop, 'type');
+  Info.Kind := JStr(Prop, 'kind');
+  Info.Scope := JStr(Prop, 'scope');
+  Info.Value := JStr(Prop, 'value');
+  Info.Values := JArr(JObj(JObj(FReport, 'control'), 'types'), Info.TypeName);
+  Info.Truncated := Prop.GetValue<Boolean>('truncated', False) and (Text = Info.Value);
+  NewText := Text;
+  if not PropEditor.EditProperty(Self, Info, NewText, Error) then
+    Exit;
+
+  Request := TJSONObject.Create;
+  try
+    Request.AddPair('op', 'set');
+    Request.AddPair('property', Info.Name);
+    Request.AddPair('value', NewText);
+    if StartRequest(Request) then
+    begin
+      FEditName := Info.Name;
+      FEditText := NewText;
+    end;
+  finally
+    Request.Free;
+  end;
+end;
+
+function TfrmMain.StartRequest(Request: TJSONObject): Boolean;
+var
+  Wnd: HWND;
+  Injector: string;
+begin
+  Result := False;
+  if (FRunner <> nil) or not ReportOk then
+    Exit;
+  Wnd := HWND(FReport.GetValue<Int64>('window.hwnd', 0));
+  if not IsWindow(Wnd) then
+  begin
+    ShowError('The target window no longer exists. Pick the control again.');
+    Exit;
+  end;
+  try
+    Injector := InjectorFor(Wnd);
+  except
+    on E: Exception do
+    begin
+      ShowError(E.Message);
+      Exit;
+    end;
+  end;
+  Result := True;
+  Request.AddPair('address', JStr(FReport, 'control.address'));
+  ShowInfo('Sending to ' + DescribeWindow(Wnd) + ' ...');
+  Screen.Cursor := crHourGlass;
+  FRunner := TInjectRunner.Create(Format('"%s" --hwnd %d --request -', [Injector, NativeUInt(Wnd)]),
+    TEncoding.UTF8.GetBytes(Request.ToJSON), RequestDone);
+end;
+
+procedure TfrmMain.RequestDone(Sender: TObject);
+var
+  Json, Error, Name, Text: string;
+  Value: TJSONValue;
+  Changed: TJSONObject;
+begin
+  Screen.Cursor := crDefault;
+  FRunner := nil;
+  Json := TInjectRunner(Sender).Output;
+  Name := FEditName;
+  Text := FEditText;
+  FEditName := '';
+  FEditText := '';
+
+  Value := TJSONObject.ParseJSONValue(Json);
+  try
+    if not (Value is TJSONObject) then
+      Error := 'Unexpected output from the injector: ' + Json
+    else if not TJSONObject(Value).GetValue<Boolean>('ok', False) then
+      Error := JStr(TJSONObject(Value), 'error')
+    else
+      Error := '';
+    if Error <> '' then
+    begin
+      // Keep showing the last good report
+      ShowError(Error);
+      if Name <> '' then
+        // Not from inside this OnTerminate handler: the runner thread waits for it
+        TThread.ForceQueue(nil,
+          procedure
+          begin
+            EditProperty(FindProperty(Name), Text, Error);
+          end);
+      Exit;
+    end;
+  finally
+    Value.Free;
+  end;
+
+  ShowReport(Json, False);
+  Changed := JObj(FReport, 'changed');
+  if Changed <> nil then
+    ShowInfo(Format('%s.%s changed from "%s" to "%s"', [JStr(FReport, 'control.path'),
+      JStr(Changed, 'property'), JStr(Changed, 'oldValue'), JStr(Changed, 'newValue')]))
+  else
+    ShowInfo('Refreshed ' + JStr(FReport, 'control.path') + ' at ' + TimeToStr(Time));
 end;
 
 procedure TfrmMain.FillEvents(Control: TJSONObject);
@@ -519,6 +700,65 @@ end;
 procedure TfrmMain.edtFilterChange(Sender: TObject);
 begin
   FillProperties;
+end;
+
+procedure TfrmMain.btnEditClick(Sender: TObject);
+var
+  Prop: TJSONObject;
+begin
+  Prop := SelectedProperty;
+  if Prop <> nil then
+    EditProperty(Prop, JStr(Prop, 'value'), '');
+end;
+
+procedure TfrmMain.btnRefreshClick(Sender: TObject);
+var
+  Request: TJSONObject;
+begin
+  Request := TJSONObject.Create;
+  try
+    Request.AddPair('op', 'get');
+    StartRequest(Request);
+  finally
+    Request.Free;
+  end;
+end;
+
+procedure TfrmMain.lvPropertiesDblClick(Sender: TObject);
+begin
+  btnEditClick(nil);
+end;
+
+procedure TfrmMain.lvPropertiesKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+begin
+  if (Key = VK_RETURN) or (Key = VK_F2) then
+  begin
+    Key := 0;
+    btnEditClick(nil);
+  end;
+end;
+
+procedure TfrmMain.lvPropertiesSelectItem(Sender: TObject; Item: TListItem; Selected: Boolean);
+begin
+  if Selected then
+    FSelectedName := Item.Caption;
+  UpdatePropertyButtons;
+end;
+
+procedure TfrmMain.lvPropertiesCustomDrawItem(Sender: TCustomListView; Item: TListItem;
+  State: TCustomDrawState; var DefaultDraw: Boolean);
+begin
+  if (Item.Data <> nil) and not TJSONObject(Item.Data).GetValue<Boolean>('editable', False) then
+    Sender.Canvas.Font.Color := clGrayText;
+end;
+
+procedure TfrmMain.FormKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+begin
+  if (Key = VK_F5) and (Shift = []) then
+  begin
+    Key := 0;
+    btnRefreshClick(nil);
+  end;
 end;
 
 procedure TfrmMain.lbHistoryClick(Sender: TObject);

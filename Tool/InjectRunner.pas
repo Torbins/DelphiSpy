@@ -1,7 +1,8 @@
 unit InjectRunner;
 
 { Starts the VclSpyInject.exe that matches the target's bitness on a
-  background thread and collects the JSON it writes to stdout. }
+  background thread, optionally feeds it a request on stdin, and collects
+  the JSON it writes to stdout. }
 
 interface
 
@@ -12,12 +13,15 @@ type
   TInjectRunner = class(TThread)
   private
     FCommandLine: string;
+    FInput: TBytes;
     FOutput: string;
   protected
     procedure Execute; override;
   public
-    // OnDone runs on the main thread; read Output there
-    constructor Create(const CommandLine: string; OnDone: TNotifyEvent);
+    // OnDone runs on the main thread; read Output there. Input goes to the
+    // injector's stdin (for --request -).
+    constructor Create(const CommandLine: string; OnDone: TNotifyEvent); overload;
+    constructor Create(const CommandLine: string; const Input: TBytes; OnDone: TNotifyEvent); overload;
     property Output: string read FOutput;
   end;
 
@@ -126,14 +130,20 @@ begin
   OnTerminate := OnDone;
 end;
 
+constructor TInjectRunner.Create(const CommandLine: string; const Input: TBytes; OnDone: TNotifyEvent);
+begin
+  FInput := Input; // before the thread starts in the inherited constructor
+  Create(CommandLine, OnDone);
+end;
+
 procedure TInjectRunner.Execute;
 var
   Security: TSecurityAttributes;
-  ReadPipe, WritePipe: THandle;
+  ReadPipe, WritePipe, InputRead, InputWrite: THandle;
   Startup: TStartupInfo;
   Info: TProcessInformation;
   Buffer: array[0..4095] of Byte;
-  Count: DWORD;
+  Count, Written: DWORD;
   Bytes: TBytesStream;
   Cmd: string;
 begin
@@ -142,22 +152,34 @@ begin
     Security.lpSecurityDescriptor := nil;
     Security.bInheritHandle := True;
     Win32Check(CreatePipe(ReadPipe, WritePipe, @Security, 0));
+    InputRead := 0;
+    InputWrite := 0;
     Bytes := TBytesStream.Create;
     try
       SetHandleInformation(ReadPipe, HANDLE_FLAG_INHERIT, 0);
+      Win32Check(CreatePipe(InputRead, InputWrite, @Security, 0));
+      SetHandleInformation(InputWrite, HANDLE_FLAG_INHERIT, 0);
       FillChar(Startup, SizeOf(Startup), 0);
       Startup.cb := SizeOf(Startup);
       Startup.dwFlags := STARTF_USESTDHANDLES;
+      Startup.hStdInput := InputRead;
       Startup.hStdOutput := WritePipe;
       Startup.hStdError := WritePipe;
       Cmd := FCommandLine;
       UniqueString(Cmd);
       Win32Check(CreateProcess(nil, PChar(Cmd), nil, nil, True, CREATE_NO_WINDOW, nil, nil,
         Startup, Info));
-      // Our copy of the write end must go, or ReadFile never sees end-of-file
+      // Our copies of the child's pipe ends must go, or nobody sees end-of-file
       CloseHandle(WritePipe);
       WritePipe := 0;
+      CloseHandle(InputRead);
+      InputRead := 0;
       try
+        // The injector reads all of stdin before it writes anything
+        if FInput <> nil then
+          WriteFile(InputWrite, FInput[0], Length(FInput), Written, nil);
+        CloseHandle(InputWrite);
+        InputWrite := 0;
         while ReadFile(ReadPipe, Buffer, SizeOf(Buffer), Count, nil) and (Count > 0) do
           Bytes.WriteBuffer(Buffer, Count);
         if WaitForSingleObject(Info.hProcess, ProcessTimeout) = WAIT_TIMEOUT then
@@ -174,6 +196,10 @@ begin
       CloseHandle(ReadPipe);
       if WritePipe <> 0 then
         CloseHandle(WritePipe);
+      if InputRead <> 0 then
+        CloseHandle(InputRead);
+      if InputWrite <> 0 then
+        CloseHandle(InputWrite);
     end;
   except
     on E: Exception do
