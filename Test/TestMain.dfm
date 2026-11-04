@@ -2,7 +2,7 @@ object frmTest: TfrmTest
   Left = 200
   Top = 200
   Caption = 'VclSpy Test'
-  ClientHeight = 260
+  ClientHeight = 360
   ClientWidth = 460
   Color = clBtnFace
   Font.Charset = DEFAULT_CHARSET
@@ -95,9 +95,50 @@ object frmTest: TfrmTest
     TabOrder = 6
     Text = 'Labeled edit'
   end
+  object lvItems: TListView
+    Left = 16
+    Top = 248
+    Width = 200
+    Height = 84
+    Columns = <
+      item
+        Caption = 'Name'
+        Width = 90
+      end
+      item
+        Caption = 'Value'
+        Width = 90
+      end>
+    TabOrder = 7
+    ViewStyle = vsReport
+  end
+  object tvItems: TTreeView
+    Left = 232
+    Top = 248
+    Width = 204
+    Height = 84
+    Indent = 19
+    TabOrder = 8
+  end
+  object pnlImageHost: TPanel
+    Left = 300
+    Top = 12
+    Width = 40
+    Height = 36
+    BevelOuter = bvNone
+    Caption = 'ImageHost'
+    TabOrder = 9
+    object imgIcon: TImage
+      Left = 0
+      Top = 0
+      Width = 40
+      Height = 36
+      Align = alClient
+    end
+  end
   object sbMain: TStatusBar
     Left = 0
-    Top = 241
+    Top = 341
     Width = 460
     Height = 19
     Panels = <

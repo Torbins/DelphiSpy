@@ -20,6 +20,10 @@ type
     actSave: TAction;
     edtLabeled: TLabeledEdit;
     sbMain: TStatusBar;
+    lvItems: TListView;
+    tvItems: TTreeView;
+    pnlImageHost: TPanel;
+    imgIcon: TImage;
     procedure FormCreate(Sender: TObject);
     procedure btnOkClick(Sender: TObject);
     procedure actSaveExecute(Sender: TObject);
@@ -37,6 +41,7 @@ const
   Bitness = {$IFDEF WIN64}'x64'{$ELSE}'x86'{$ENDIF};
 var
   Linking: string;
+  Item: TListItem;
 begin
   // The test script finds each variant by this caption
   if FindClassHInstance(TForm) <> HInstance then
@@ -50,6 +55,18 @@ begin
   Linking := Linking + ' SimpleShareMem';
 {$ENDIF}
   Caption := Format('VclSpy Test %d %s %s', [Trunc(CompilerVersion), Bitness, Linking]);
+
+  // The DFM keeps these items in binary form
+  Item := lvItems.Items.Add;
+  Item.Caption := 'First';
+  Item.SubItems.Add('One');
+  Item := lvItems.Items.Add;
+  Item.Caption := 'Second';
+  Item.SubItems.Add('Two');
+  tvItems.Items.AddChild(tvItems.Items.Add(nil, 'Root'), 'Child');
+  tvItems.Items.Add(nil, 'Other');
+  // Reading Picture.Bitmap would turn it into a bitmap
+  imgIcon.Picture.Assign(Application.Icon);
 end;
 
 procedure TfrmTest.btnOkClick(Sender: TObject);

@@ -2,10 +2,11 @@ unit VclSpy.Members;
 
 { The properties of the inspected control as a tree: its own properties, the
   properties of the objects that object properties return (Font.Size,
-  Margins.Left), the items of collections (Panels[0].Width), and the fields of
-  the records that public properties return (BoundsRect.Left). A member's
-  path names it in requests: names joined with ".", collection items as
-  "[index]" (JoinPath).
+  Margins.Left), the items of collections, list views and tree views
+  (Panels[0].Width, Items[0].Caption), and the fields of the records that
+  public properties return (BoundsRect.Left). A member's path names it in
+  requests: names joined with ".", collection items as "[index]"
+  (JoinPath).
 
   Object and record properties themselves are read-only; their members are
   read and edited like the control's properties. A record field is written by
@@ -15,10 +16,13 @@ unit VclSpy.Members;
   Images) are references, not part of the control: their members are not
   reached. Subcomponents (TLabeledEdit.EditLabel) are.
 
-  Published properties come from RTTI, record properties from extended RTTI
-  (System.Rtti), which the RTL and VCL have for public properties and for
-  record fields. Records can't be published. Running in a no-packages
-  inspector, System.Rtti reads the target's type information, which has the
+  Objects show their published and public properties, the control its
+  published properties and public record properties (records can't be
+  published). Published properties come from RTTI, public ones from extended
+  RTTI (System.Rtti), which the RTL and VCL have for public properties and
+  for record fields. Public getters that change the object
+  (TPicture.Bitmap) are skipped. Running in a no-packages inspector,
+  System.Rtti reads the target's type information, which has the
   inspector's layout (VclSpy.Target). }
 
 interface
@@ -42,10 +46,10 @@ type
     Name, Scope: string;
     Info: PTypeInfo;
     Kind: TMemberKind;
-    Instance: TObject;       // the object of a property; the collection of an item
+    Instance: TObject;       // the object of a property; the list of an item
     Prop: PPropInfo;         // mkPublished
     Extra: TExtraProp;       // mkExtra
-    RttiProp: TRttiProperty; // mkPublic
+    RttiProp: TRttiInstanceProperty; // mkPublic
     Rec: IRecordValue;       // mkField: the record the field is part of
     Data: Pointer;           // mkField: the field in Rec.Data
     Index: Integer;          // mkItem
@@ -66,8 +70,8 @@ type
 // The control's published properties, the ExtraProps its class doesn't
 // publish and its public record properties, sorted by name
 function ControlMembers(Ctrl: TControl): TArray<TMember>;
-// The published and public record properties of Obj, sorted by name, then
-// the items of a collection
+// The published and public properties of Obj, sorted by name, then the
+// items of a collection, of a list view or of a tree view
 function ObjectMembers(Obj: TObject): TArray<TMember>;
 // Whether the members of Obj, the value of an object property, are shown:
 // not those of other components
@@ -79,10 +83,11 @@ function JoinPath(const Path, Name: string): string;
 implementation
 
 uses
-  System.Classes, System.Variants, System.Generics.Collections, System.Generics.Defaults, VclSpy.Target;
+  System.Classes, System.Variants, System.Generics.Collections, System.Generics.Defaults, Vcl.Graphics,
+  Vcl.ComCtrls, VclSpy.Target;
 
 const
-  // Items of a collection that are shown
+  // Items of a collection, list view or tree view that are shown
   MaxItems = 100;
 
 var
@@ -179,8 +184,10 @@ begin
         Move(P^, SetValue, TypeSize(Info));
         Result := OrdToText(Info, SetValue);
       end
+      else if SetElementType(Info) <> nil then
+        Result := SetToString(Info, P, True)
       else
-        Result := SetToString(Info, P, True);
+        Result := '(set)';
     tkInt64:
       Result := IntToStr(PInt64(P)^);
     tkFloat:
@@ -301,6 +308,42 @@ begin
   FProp.SetValue(FInstance, FValue);
 end;
 
+{ Item lists: collections, and the items of list views and tree views }
+
+function IsItemList(Obj: TObject): Boolean;
+begin
+  Result := IsKindOf(Obj, TCollection) or IsKindOf(Obj, TListItems) or IsKindOf(Obj, TTreeNodes);
+end;
+
+function ItemCount(List: TObject): Integer;
+begin
+  if IsKindOf(List, TCollection) then
+    Result := TCollection(List).Count
+  else if IsKindOf(List, TListItems) then
+    Result := TListItems(List).Count
+  else
+    Result := TTreeNodes(List).Count;
+end;
+
+// Tree nodes by their absolute index: parents before their children
+function ItemAt(List: TObject; Index: Integer): TObject;
+begin
+  if IsKindOf(List, TCollection) then
+    Result := TCollection(List).Items[Index]
+  else if IsKindOf(List, TListItems) then
+    Result := TListItems(List).Item[Index]
+  else
+    Result := TTreeNodes(List).Item[Index];
+end;
+
+// Public properties whose getters change the object: reading TPicture.Bitmap
+// turns a picture of another kind (the PNG of a TImage) into a bitmap
+function IsSkipped(Obj: TObject; const Name: string): Boolean;
+begin
+  Result := IsKindOf(Obj, TPicture) and (SameText(Name, 'Bitmap') or SameText(Name, 'Icon') or
+    SameText(Name, 'Metafile') or SameText(Name, 'WICImage'));
+end;
+
 { TMember }
 
 function TMember.IsObject: Boolean;
@@ -319,7 +362,7 @@ begin
     mkPublished: Result := GetObjectProp(Instance, Prop);
     mkPublic: Result := RttiProp.GetValue(Instance).AsObject;
     mkField: Result := TObject(PPointer(Data)^);
-    mkItem: Result := TCollection(Instance).Items[Index];
+    mkItem: Result := ItemAt(Instance, Index);
   else
     Result := nil;
   end;
@@ -337,10 +380,7 @@ begin
     mkPublic:
       begin
         Value := RttiProp.GetValue(Instance);
-        if IsRecord then
-          Result := RecordText(Info, Value.GetReferenceToRawData)
-        else
-          Result := Value.ToString;
+        Result := MemoryText(Info, Value.GetReferenceToRawData);
       end;
     mkField:
       Result := MemoryText(Info, Data);
@@ -354,6 +394,7 @@ begin
   case Kind of
     mkPublished: Result := IsEditablePublished(Prop);
     mkExtra: Result := Extra.IsEditable;
+    mkPublic: Result := RttiProp.IsWritable and IsEditableType(Info) and CanSetString(RttiProp.PropInfo);
     mkField: Result := IsEditableType(Info) and (Rec.ReadOnlyReason = '');
   else
     Result := False;
@@ -363,6 +404,8 @@ end;
 procedure TMember.SetValueText(const Text: string);
 var
   Reason: string;
+  Value: TValue;
+  RefCount: PInteger;
 begin
   if IsObject then
     raise EConvertError.CreateFmt('%s (%s) is an object: edit its properties instead.', [Name, GetTypeName(Info)]);
@@ -373,6 +416,28 @@ begin
       SetPublishedText(Instance, Prop, Text);
     mkExtra:
       Extra.SetValueText(TControl(Instance), Text);
+    mkPublic:
+      begin
+        if not IsEditableType(Info) then
+          raise EConvertError.CreateFmt('%s (%s) cannot be edited in VclSpy.', [Name, GetTypeName(Info)]);
+        if not RttiProp.IsWritable then
+          raise EConvertError.CreateFmt('%s is read-only.', [Name]);
+        if not CanSetString(RttiProp.PropInfo) then
+          raise EConvertError.CreateFmt('%s (%s) cannot be edited: the inspector doesn''t share the ' +
+            'target''s memory manager.', [Name, GetTypeName(Info)]);
+        TValue.Make(nil, Info, Value);
+        SetMemoryText(Info, Value.GetReferenceToRawData, Text);
+        // RTTI hands this very string to the setter
+        if (Info^.Kind = tkUString) and not TargetMayKeepOurMemory then
+          RefCount := MakeLiteral(PUnicodeString(Value.GetReferenceToRawData)^)
+        else
+          RefCount := nil;
+        try
+          RttiProp.SetValue(Instance, Value);
+        finally
+          EndLiteral(RefCount);
+        end;
+      end;
     mkField:
       begin
         if not IsEditableType(Info) then
@@ -476,7 +541,9 @@ begin
   end;
 end;
 
-procedure AddPublicRecords(var List: TArray<TMember>; Obj: TObject);
+// Public record properties; with AllKinds all public properties but events
+// and those IsSkipped
+procedure AddPublic(var List: TArray<TMember>; Obj: TObject; AllKinds: Boolean);
 var
   ObjType: TRttiType;
   Prop: TRttiProperty;
@@ -490,8 +557,10 @@ begin
   // The class's own properties come first, then those of its ancestors, which
   // it may hide
   for Prop in ObjType.GetProperties do
-    if (Prop.Visibility = mvPublic) and Prop.IsReadable and (Prop.PropertyType <> nil) and
-      (Prop.PropertyType.TypeKind in [tkRecord, tkMRecord]) and (IndexOfName(List, Prop.Name) < 0) then
+    if (Prop.Visibility = mvPublic) and Prop.IsReadable and (Prop is TRttiInstanceProperty) and
+      (Prop.PropertyType <> nil) and (IndexOfName(List, Prop.Name) < 0) and
+      ((Prop.PropertyType.TypeKind in [tkRecord, tkMRecord]) or
+      (AllKinds and (Prop.PropertyType.TypeKind <> tkMethod) and not IsSkipped(Obj, Prop.Name))) then
     begin
       M := Default(TMember);
       M.Name := Prop.Name;
@@ -499,7 +568,7 @@ begin
       M.Info := Prop.PropertyType.Handle;
       M.Kind := mkPublic;
       M.Instance := Obj;
-      M.RttiProp := Prop;
+      M.RttiProp := TRttiInstanceProperty(Prop);
       List := List + [M];
     end;
 end;
@@ -513,17 +582,17 @@ begin
     end));
 end;
 
-procedure AddItems(var List: TArray<TMember>; Collection: TCollection);
+procedure AddItems(var List: TArray<TMember>; Items: TObject);
 var
   I: Integer;
-  Item: TCollectionItem;
+  Item: TObject;
   M: TMember;
 begin
-  for I := 0 to Collection.Count - 1 do
+  for I := 0 to ItemCount(Items) - 1 do
   begin
     if I = MaxItems then
       Break;
-    Item := Collection.Items[I];
+    Item := ItemAt(Items, I);
     if Item.ClassInfo = nil then
       Continue;
     M := Default(TMember);
@@ -531,7 +600,7 @@ begin
     M.Scope := 'item';
     M.Info := PTypeInfo(Item.ClassInfo);
     M.Kind := mkItem;
-    M.Instance := Collection;
+    M.Instance := Items;
     M.Index := I;
     List := List + [M];
   end;
@@ -555,7 +624,7 @@ begin
     M.Extra := Extra;
     Result := Result + [M];
   end;
-  AddPublicRecords(Result, Ctrl);
+  AddPublic(Result, Ctrl, False);
   SortByName(Result);
 end;
 
@@ -563,10 +632,10 @@ function ObjectMembers(Obj: TObject): TArray<TMember>;
 begin
   Result := nil;
   AddPublished(Result, Obj);
-  AddPublicRecords(Result, Obj);
+  AddPublic(Result, Obj, True);
   SortByName(Result);
-  if IsKindOf(Obj, TCollection) then
-    AddItems(Result, TCollection(Obj));
+  if IsItemList(Obj) then
+    AddItems(Result, Obj);
 end;
 
 function ShowsMembers(Obj: TObject): Boolean;

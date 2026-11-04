@@ -179,6 +179,22 @@ foreach ($v in $variants) {
         $combo = Child $form 'TComboBox' $null
         $r = Inspect $v.Arch (Child $combo 'Edit' $null)
         Check 'combo (via inner edit) name' $r.control.name 'cmbChoice'
+        # Public properties of objects
+        Check 'Items.Count (public)' (SubProp $r 'Items.Count').value '2'
+        Check 'Items.Count scope' (SubProp $r 'Items.Count').scope 'public'
+        Check 'Items.Count editable' (SubProp $r 'Items.Count').editable $false
+        $s = SetProp $v.Arch $r 'Items.CommaText' 'A,B,C'
+        Check 'set public Items.CommaText' (SubProp $s 'Items.Count').value '3'
+        Check 'set public Items.CommaText value' (SubProp $s 'Items.CommaText').value 'A,B,C'
+
+        # Getters that change the object are not read
+        $r = Inspect $v.Arch (Child $form 'TPanel' 'ImageHost')
+        Check 'image name' $r.control.name 'imgIcon'
+        Check 'Picture.Graphic' (SubProp $r 'Picture.Graphic').value '(TIcon)'
+        Check 'Picture.Bitmap skipped' ($null -eq (SubProp $r 'Picture.Bitmap')) $true
+        Check 'Picture.Icon skipped' ($null -eq (SubProp $r 'Picture.Icon')) $true
+        $r = Inspect $v.Arch (Child $form 'TPanel' 'ImageHost')
+        Check 'Picture.Graphic still an icon' (SubProp $r 'Picture.Graphic').value '(TIcon)'
 
         $r = Inspect $v.Arch (Child $form 'TButton' 'Save')
         Check 'action button name' $r.control.name 'btnAction'
@@ -348,6 +364,30 @@ foreach ($v in $variants) {
         Check 'set Panels[0].Width' (SubProp $s 'Panels[0].Width').value '150'
         $e = SetProp $v.Arch $s 'Panels[5].Width' '1'
         CheckLike 'missing item error' $e.error '*Panels has no property*'
+
+        # List view and tree view items: their public properties
+        $r = Inspect $v.Arch (Child $form 'TListView' $null)
+        Check 'list view name' $r.control.name 'lvItems'
+        Check 'list view Items' (Prop $r 'Items').value '(TListItems, Count = 2)'
+        Check 'list item value' (SubProp $r 'Items[1]').value '(TListItem) Second'
+        Check 'list item Caption' (SubProp $r 'Items[1].Caption').value 'Second'
+        Check 'list item Caption scope' (SubProp $r 'Items[1].Caption').scope 'public'
+        Check 'list item Caption editable' (SubProp $r 'Items[1].Caption').editable $true
+        Check 'list item Index editable' (SubProp $r 'Items[1].Index').editable $false
+        CheckLike 'list item SubItems' (SubProp $r 'Items[1].SubItems').value '*Count = 1*Two'
+        $s = SetProp $v.Arch $r 'Items[1].Caption' 'Changed item'
+        Check 'set list item Caption' (SubProp $s 'Items[1].Caption').value 'Changed item'
+        $s = SetProp $v.Arch $s 'Items[0].ImageIndex' '3'
+        Check 'set list item ImageIndex' (SubProp $s 'Items[0].ImageIndex').value '3'
+        $e = SetProp $v.Arch $s 'Items[0].Index' '1'
+        CheckLike 'read-only public property error' $e.error '*Index is read-only*'
+
+        $r = Inspect $v.Arch (Child $form 'TTreeView' $null)
+        Check 'tree view Items' (Prop $r 'Items').value '(TTreeNodes, Count = 3)'
+        Check 'tree node Text' (SubProp $r 'Items[1].Text').value 'Child'
+        Check 'tree node Level' (SubProp $r 'Items[1].Level').value '1'
+        $s = SetProp $v.Arch $r 'Items[1].Text' 'Changed node'
+        Check 'set tree node Text' (SubProp $s 'Items[1].Text').value 'Changed node'
 
         # A graphic control: requests go to its parent's window
         $r = Inspect $v.Arch (Child $form 'TPanel' 'LabelHost')

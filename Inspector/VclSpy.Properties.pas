@@ -47,12 +47,22 @@ type
 
 function OrdToText(Info: PTypeInfo; Value: Int64): string;
 function IsDateTimeType(Info: PTypeInfo): Boolean;
+// The element type of a set, or nil if it has no type information
+function SetElementType(Info: PTypeInfo): PTypeInfo;
 // Parse text for a type; raise EConvertError with a message for the user
 // when the text doesn't fit it
 function TextToOrd(Info: PTypeInfo; const Text: string): Int64;
 function TextToFloat(Info: PTypeInfo; const Text: string): Extended;
 // Types whose values VclSpy edits as text
 function IsEditableType(Info: PTypeInfo): Boolean;
+
+// Whether the target may keep the string that the setter of Prop gets (see
+// TargetMayKeepOurMemory); with MakeLiteral if it's a UnicodeString
+function CanSetString(Prop: PPropInfo): Boolean;
+// Makes S look like a string literal (reference count -1) until EndLiteral,
+// so that the target's code copies it when it assigns it. nil for ''.
+function MakeLiteral(var S: string): PInteger;
+procedure EndLiteral(RefCount: PInteger);
 
 // The full value of a published property; objects only by class name
 function PublishedText(Instance: TObject; Prop: PPropInfo): string;
@@ -248,6 +258,17 @@ begin
     raise EConvertError.CreateFmt('"%s" is not a number.', [Text]);
 end;
 
+function SetElementType(Info: PTypeInfo): PTypeInfo;
+var
+  Comp: PPTypeInfo;
+begin
+  Comp := GetTypeData(Info)^.CompType;
+  if Comp = nil then
+    Result := nil
+  else
+    Result := Comp^;
+end;
+
 { Published properties }
 
 function IsEditableType(Info: PTypeInfo): Boolean;
@@ -261,8 +282,8 @@ begin
     tkSet:
       begin
         // GetOrdProp/SetOrdProp hold sets of up to 32 elements
-        Comp := GetTypeData(Info)^.CompType^;
-        Result := (Comp^.Kind = tkEnumeration) and (GetTypeData(Comp)^.MinValue >= 0) and
+        Comp := SetElementType(Info);
+        Result := (Comp <> nil) and (Comp^.Kind = tkEnumeration) and (GetTypeData(Comp)^.MinValue >= 0) and
           (GetTypeData(Comp)^.MaxValue < 32);
       end;
   else
@@ -300,27 +321,36 @@ begin
     not IsComponentName(Prop) and CanSetString(Prop);
 end;
 
-// Calls the setter with a copy of Text whose reference count is -1, like a
-// string literal's. Assigning such a string makes a copy, with the target's
-// memory manager when the target's code assigns it.
+// Assigning a string whose reference count is -1, like a string literal's,
+// makes a copy, with the target's memory manager when the target's code
+// assigns it
+function MakeLiteral(var S: string): PInteger;
+begin
+  if S = '' then
+    Exit(nil);
+  UniqueString(S);
+  Result := PInteger(PByte(Pointer(S)) + StrRefCountOffset);
+  Result^ := -1;
+end;
+
+procedure EndLiteral(RefCount: PInteger);
+begin
+  if RefCount <> nil then
+    RefCount^ := 1;
+end;
+
+// Calls the setter with a copy of Text that looks like a string literal
 procedure SetLiteralStrProp(Instance: TObject; Prop: PPropInfo; const Text: string);
 var
   S: string;
   RefCount: PInteger;
 begin
   S := Text;
-  if S = '' then
-  begin
-    SetStrProp(Instance, Prop, S);
-    Exit;
-  end;
-  UniqueString(S);
-  RefCount := PInteger(PByte(Pointer(S)) + StrRefCountOffset);
-  RefCount^ := -1;
+  RefCount := MakeLiteral(S);
   try
     SetStrProp(Instance, Prop, S);
   finally
-    RefCount^ := 1;
+    EndLiteral(RefCount);
   end;
 end;
 

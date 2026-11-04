@@ -32,7 +32,7 @@ implementation
 uses
   Winapi.Messages, System.Types, System.SysUtils, System.Classes, System.TypInfo,
   System.JSON, System.Generics.Collections,
-  Vcl.Graphics, Vcl.Controls, Vcl.Forms,
+  Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.ComCtrls,
   VclSpy.Protocol, VclSpy.Properties, VclSpy.Members, VclSpy.Target, VclSpy.MemoryManager;
 
 type
@@ -217,6 +217,14 @@ begin
       ColorToString(TFont(Obj).Color)])
   else if IsKindOf(Obj, TCollectionItem) then
     Result := Format('(%s) %s', [Obj.ClassName, Shorten(TCollectionItem(Obj).DisplayName)])
+  else if IsKindOf(Obj, TListItems) then
+    Result := Format('(%s, Count = %d)', [Obj.ClassName, TListItems(Obj).Count])
+  else if IsKindOf(Obj, TTreeNodes) then
+    Result := Format('(%s, Count = %d)', [Obj.ClassName, TTreeNodes(Obj).Count])
+  else if IsKindOf(Obj, TListItem) then
+    Result := Format('(%s) %s', [Obj.ClassName, Shorten(TListItem(Obj).Caption)])
+  else if IsKindOf(Obj, TTreeNode) then
+    Result := Format('(%s) %s', [Obj.ClassName, Shorten(TTreeNode(Obj).Text)])
   else
     Result := '(' + Obj.ClassName + ')';
 end;
@@ -309,13 +317,14 @@ function MemberJson(const Member: TMember; const Path: string; Depth: Integer; T
 var
   Value: string;
   Obj: TObject;
-  Failed: Boolean;
+  Failed, Editable: Boolean;
   Members: TArray<TMember>;
   Child: TMember;
   List: TJSONArray;
 begin
   Obj := nil;
   Failed := False;
+  Editable := False;
   try
     if Member.IsObject then
     begin
@@ -324,11 +333,12 @@ begin
     end
     else
       Value := Member.ValueText;
+    Editable := Member.IsEditable;
   except
     Value := '<error: ' + ExceptionMessage + '>';
     Failed := True;
   end;
-  Result := PropJson(Member.Name, Path, Member.Info, Value, Member.Scope, Member.IsEditable, Types);
+  Result := PropJson(Member.Name, Path, Member.Info, Value, Member.Scope, Editable, Types);
   if Failed or (Depth >= MaxPropertyDepth) then
     Exit;
 
