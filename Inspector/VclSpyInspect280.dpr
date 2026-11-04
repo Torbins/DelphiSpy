@@ -9,6 +9,8 @@ library VclSpyInspect280;
 
 uses
   VclSpy.Protocol in '..\Common\VclSpy.Protocol.pas',
+  VclSpy.MemoryManager in 'VclSpy.MemoryManager.pas',
+  VclSpy.Target in 'VclSpy.Target.pas',
   VclSpy.Properties in 'VclSpy.Properties.pas',
   VclSpy.Inspector in 'VclSpy.Inspector.pas';
 

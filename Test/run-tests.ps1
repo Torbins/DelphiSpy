@@ -100,11 +100,20 @@ function Start-Target($Dir, $Title) {
     throw "Window '$Title' of $exe did not appear"
 }
 
+# Memory: the memory manager a no-packages inspector should report, $null for packages
 $variants = @(
-    @{ Dir = '270-x86'; Arch = 'x86'; Title = 'VclSpy Test 34 x86 packages' },
-    @{ Dir = '270-x64'; Arch = 'x64'; Title = 'VclSpy Test 34 x64 packages' },
-    @{ Dir = '280-x86'; Arch = 'x86'; Title = 'VclSpy Test 35 x86 packages' },
-    @{ Dir = '280-x64'; Arch = 'x64'; Title = 'VclSpy Test 35 x64 packages' }
+    @{ Dir = '270-x86'; Arch = 'x86'; Title = 'VclSpy Test 34 x86 packages'; Memory = $null },
+    @{ Dir = '270-x64'; Arch = 'x64'; Title = 'VclSpy Test 34 x64 packages'; Memory = $null },
+    @{ Dir = '280-x86'; Arch = 'x86'; Title = 'VclSpy Test 35 x86 packages'; Memory = $null },
+    @{ Dir = '280-x64'; Arch = 'x64'; Title = 'VclSpy Test 35 x64 packages'; Memory = $null },
+    # 280 is tried first and refuses the 270 target
+    @{ Dir = '270-x86-nopkg'; Arch = 'x86'; Title = 'VclSpy Test 34 x86 static'; Memory = 'own, guarded' },
+    @{ Dir = '280-x86-nopkg'; Arch = 'x86'; Title = 'VclSpy Test 35 x86 static'; Memory = 'own, guarded' },
+    @{ Dir = '280-x64-nopkg'; Arch = 'x64'; Title = 'VclSpy Test 35 x64 static'; Memory = 'own, guarded' },
+    @{ Dir = '280-x86-sharemem'; Arch = 'x86'; Title = 'VclSpy Test 35 x86 static ShareMem'; Memory = 'borlndmm.dll' },
+    @{ Dir = '280-x64-sharemem'; Arch = 'x64'; Title = 'VclSpy Test 35 x64 static ShareMem'; Memory = 'borlndmm.dll' },
+    # The exe frees its shared memory manager's memory before the inspector ends
+    @{ Dir = '280-x86-simplesharemem'; Arch = 'x86'; Title = 'VclSpy Test 35 x86 static SimpleShareMem'; Memory = 'own, guarded' }
 )
 
 foreach ($v in $variants) {
@@ -113,6 +122,11 @@ foreach ($v in $variants) {
     try {
         $r = Inspect $v.Arch (Child $form 'TButton' 'OK')
         Check 'ok' $r.ok $true
+        if ($v.Memory) {
+            CheckLike 'inspector' $r.inspector "VclSpyInspectNoPkg$($v.Dir.Substring(0, 3)).dll*"
+            Check 'memory manager' $r.process.memoryManager $v.Memory
+            Check 'VCL module' $r.process.vclModule 'TestTarget.exe'
+        }
         Check 'button name' $r.control.name 'btnOk'
         Check 'button OnClick' ($r.control.events | Where-Object name -eq 'OnClick').handler 'TfrmTest.btnOkClick'
         Check 'button unit' $r.control.unitName 'Vcl.StdCtrls'
@@ -176,15 +190,38 @@ foreach ($v in $variants) {
         Check 'Name editable' (Prop $r 'Name').editable $false
         Check 'Align values' ($r.control.types.TAlign -join ',') 'alNone,alTop,alBottom,alLeft,alRight,alClient,alCustom'
 
+        # Hint is written straight to a field, by the inspector's code
+        $hintEditable = $v.Memory -ne 'own, guarded'
+        Check 'Hint editable' (Prop $r 'Hint').editable $hintEditable
+        if ($hintEditable) {
+            $r = SetProp $v.Arch $r 'Hint' 'A hint'
+            Check 'set field-written Hint' (Prop $r 'Hint').value 'A hint'
+        }
+        else {
+            $e = SetProp $v.Arch $r 'Hint' 'A hint'
+            CheckLike 'field-written Hint error' $e.error '*memory manager*'
+        }
+        # The target's setter stores the string; the guarded inspector hands it a
+        # copy that looks like a literal. Unpublished, the inspector's code stores it.
+        $styleEditable = ((Prop $r 'StyleName').scope -eq 'published') -or $hintEditable
+        Check 'StyleName editable' (Prop $r 'StyleName').editable $styleEditable
+        if ($styleEditable) {
+            # Delphi 10.4 recreates the window: go on with the reply's window
+            $r = SetProp $v.Arch $r 'StyleName' 'Windows'
+            Check 'set StyleName' (Prop $r 'StyleName').value 'Windows'
+            $r = SetProp $v.Arch $r 'StyleName' ''
+            Check 'clear StyleName' (Prop $r 'StyleName').value ''
+        }
+
         $s = SetProp $v.Arch $r 'Caption' 'Changed'
         Check 'set Caption ok' $s.ok $true
         Check 'set Caption old value' $s.changed.oldValue 'OK'
         Check 'set Caption new value' $s.changed.newValue 'Changed'
         Check 'set Caption text' $s.control.text 'Changed'
-        Check 'set Caption window text' ([Win]::FindChild($form, 'TButton', 'Changed') -eq $ok) $true
+        Check 'set Caption window text' ([Win]::FindChild($form, 'TButton', 'Changed').ToInt64() -eq $s.control.hwnd) $true
 
         $s = SetProp $v.Arch $s 'Text' 'Via Text'
-        Check 'set protected Text' ([Win]::FindChild($form, 'TButton', 'Via Text') -eq $ok) $true
+        Check 'set protected Text' ([Win]::FindChild($form, 'TButton', 'Via Text').ToInt64() -eq $s.control.hwnd) $true
         $s = SetProp $v.Arch $s 'ClientWidth' '120'
         Check 'set public ClientWidth' $s.control.bounds.width 120
         $s = SetProp $v.Arch $s 'Width' ' 110 '
@@ -238,21 +275,15 @@ foreach ($v in $variants) {
 
         Start-Sleep -Milliseconds 300
         Check 'target exited' $proc.HasExited $false
+
+        # The inspector stays loaded; the target must still end normally
+        [void]$proc.CloseMainWindow()
+        Check 'target closed' $proc.WaitForExit(8000) $true
+        Check 'target exit code' $proc.ExitCode 0
     }
     finally {
         if (-not $proc.HasExited) { $proc.Kill() }
     }
-}
-
-Write-Host '== VclSpy Test 35 x86 static'
-$proc, $form = Start-Target '280-x86-nopkg' 'VclSpy Test 35 x86 static'
-try {
-    $r = Inspect 'x86' (Child $form 'TButton' 'OK')
-    Check 'static target ok' $r.ok $false
-    CheckLike 'static target error' $r.error '*not built with Delphi runtime packages*'
-}
-finally {
-    if (-not $proc.HasExited) { $proc.Kill() }
 }
 
 Write-Host ''

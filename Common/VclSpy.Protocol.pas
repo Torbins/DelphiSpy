@@ -23,10 +23,15 @@ const
   VclSpyInspectDllPrefix = 'VclSpyInspect';
   VclSpyInspectExport = 'VclSpyInspect';
   VclSpyRequestExport = 'VclSpyRequest';
+  // The no-packages inspectors, VclSpyInspectNoPkg<suffix>.dll, for targets
+  // that link the VCL statically
+  VclSpyNoPkgDllPrefix = 'VclSpyInspectNoPkg';
+  VclSpyProbeExport = 'VclSpyProbe';
   VclSpyInjectExeName = 'VclSpyInject.exe';
 
   // BPL suffixes of the Delphi versions the hook stub looks for, newest first.
-  // An inspector named VclSpyInspect<suffix>.dll must exist for each one used.
+  // An inspector named VclSpyInspect<suffix>.dll must exist for each one used,
+  // and VclSpyInspectNoPkg<suffix>.dll for targets without runtime packages.
   VclSpyPackageSuffixes: array[0..3] of string = ('370', '290', '280', '270');
 
 type
@@ -34,6 +39,9 @@ type
   TVclSpyInspectProc = procedure(Wnd: HWND; X, Y: Integer; ReplyWnd: HWND); stdcall;
   // Exported by the inspector DLLs. Request is null-terminated UTF-8 JSON.
   TVclSpyRequestProc = procedure(Wnd: HWND; Request: PAnsiChar; ReplyWnd: HWND); stdcall;
+  // Exported by the no-packages inspector DLLs: True if the VCL control of Wnd
+  // (or of a parent window) is of the Delphi version the DLL was built with.
+  TVclSpyProbeProc = function(Wnd: HWND): BOOL; stdcall;
 
 function PackPoint(X, Y: Integer): LPARAM;
 procedure UnpackPoint(Value: LPARAM; out X, Y: Integer);

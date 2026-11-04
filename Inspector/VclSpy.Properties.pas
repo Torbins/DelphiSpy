@@ -8,7 +8,15 @@ unit VclSpy.Properties;
   strings, enumerations, sets of up to 32 elements) and the TControl and
   TWinControl properties in ExtraProps. Those are declared public or
   protected, so RTTI doesn't list them unless a class republishes them;
-  access classes reach them instead. }
+  access classes reach them instead.
+
+  A no-packages inspector that doesn't share the target's memory manager
+  (VclSpy.Target.TargetMayKeepOurMemory) must not let the target keep a
+  string it allocated: the target would free it with its own memory manager.
+  String setters of the target get a copy that looks like a string literal,
+  which they copy when they assign it. Strings that the inspector's code
+  would store itself (field setters, StyleName, ImeName, AnsiString
+  properties) are read-only then. }
 
 interface
 
@@ -19,10 +27,12 @@ type
   // A property that TControl or TWinControl declares public or protected.
   // Ordinal values (Boolean, enumerations, small sets, integers) go through
   // GetOrd/SetOrd, strings through GetStr/SetStr. No setter means read-only.
+  // KeepsString: SetStr stores the string in the control (in VCL code of the
+  // inspector), instead of handing the control's window a copy.
   TExtraProp = record
     Name, Scope: string;
     Info: PTypeInfo;
-    WinControlOnly: Boolean;
+    WinControlOnly, KeepsString: Boolean;
     GetOrd: TFunc<TControl, Integer>;
     SetOrd: TProc<TControl, Integer>;
     GetStr: TFunc<TControl, string>;
@@ -57,7 +67,7 @@ function TypeValuesJson(Info: PTypeInfo): TJSONArray;
 implementation
 
 uses
-  System.Classes, System.UITypes, Vcl.Graphics, Vcl.Forms, Vcl.Menus;
+  System.Classes, System.UITypes, Vcl.Graphics, Vcl.Forms, Vcl.Menus, VclSpy.Target;
 
 type
   TControlAccess = class(TControl);
@@ -66,6 +76,8 @@ type
 const
   // Writable, but renaming breaks FindComponent lookups and the paths VclSpy shows
   ReadOnlyNames: array[0..0] of string = ('Name');
+  // Offset of StrRec.refCnt from the first character, on Win32 and Win64
+  StrRefCountOffset = -8;
 
 var
   ExtraProps: TArray<TExtraProp>;
@@ -264,10 +276,51 @@ begin
   Result := False;
 end;
 
+// Whether the target may keep the string a setter of Prop gets. In a
+// no-packages inspector with its own memory manager, only if the target's
+// setter assigns it, and copies it (SetLiteralStrProp). ShortString and
+// WideString values are not on either memory manager's heap.
+function CanSetString(Prop: PPropInfo): Boolean;
+begin
+  case Prop^.PropType^^.Kind of
+    tkLString:
+      Result := TargetMayKeepOurMemory;
+    tkUString:
+      Result := TargetMayKeepOurMemory or
+        ((NativeUInt(Prop^.SetProc) and PROPSLOT_MASK) <> PROPSLOT_FIELD);
+  else
+    Result := True;
+  end;
+end;
+
 function IsEditablePublished(Prop: PPropInfo): Boolean;
 begin
   Result := (Prop^.SetProc <> nil) and IsEditableType(Prop^.PropType^) and
-    not IsReadOnlyName(GetPropName(Prop));
+    not IsReadOnlyName(GetPropName(Prop)) and CanSetString(Prop);
+end;
+
+// Calls the setter with a copy of Text whose reference count is -1, like a
+// string literal's. Assigning such a string makes a copy, with the target's
+// memory manager when the target's code assigns it.
+procedure SetLiteralStrProp(Instance: TObject; Prop: PPropInfo; const Text: string);
+var
+  S: string;
+  RefCount: PInteger;
+begin
+  S := Text;
+  if S = '' then
+  begin
+    SetStrProp(Instance, Prop, S);
+    Exit;
+  end;
+  UniqueString(S);
+  RefCount := PInteger(PByte(Pointer(S)) + StrRefCountOffset);
+  RefCount^ := -1;
+  try
+    SetStrProp(Instance, Prop, S);
+  finally
+    RefCount^ := 1;
+  end;
 end;
 
 procedure SetPublishedText(Instance: TObject; Prop: PPropInfo; const Text: string);
@@ -282,7 +335,12 @@ begin
       SetInt64Prop(Instance, Prop, TextToOrd(Info, Text));
     tkFloat:
       SetFloatProp(Instance, Prop, TextToFloat(Info, Text));
-    tkString, tkLString, tkWString, tkUString:
+    tkUString:
+      if TargetMayKeepOurMemory then
+        SetStrProp(Instance, Prop, Text)
+      else
+        SetLiteralStrProp(Instance, Prop, Text);
+    tkString, tkLString, tkWString:
       SetStrProp(Instance, Prop, Text);
   else
     raise EConvertError.CreateFmt('Values of type %s cannot be edited.', [GetTypeName(Info)]);
@@ -293,7 +351,7 @@ end;
 
 function TExtraProp.AppliesTo(Ctrl: TControl): Boolean;
 begin
-  Result := not WinControlOnly or (Ctrl is TWinControl);
+  Result := not WinControlOnly or IsKindOf(Ctrl, TWinControl);
 end;
 
 function TExtraProp.IsString: Boolean;
@@ -303,7 +361,7 @@ end;
 
 function TExtraProp.IsEditable: Boolean;
 begin
-  Result := Assigned(SetOrd) or Assigned(SetStr);
+  Result := (Assigned(SetOrd) or Assigned(SetStr)) and (not KeepsString or TargetMayKeepOurMemory);
 end;
 
 function TExtraProp.ValueText(Ctrl: TControl): string;
@@ -316,6 +374,9 @@ end;
 
 procedure TExtraProp.SetValueText(Ctrl: TControl; const Text: string);
 begin
+  if Assigned(SetStr) and not IsEditable then
+    raise EConvertError.CreateFmt('%s cannot be edited: the inspector doesn''t share the target''s ' +
+      'memory manager.', [Name]);
   if not IsEditable then
     raise EConvertError.CreateFmt('%s is read-only.', [Name]);
   if IsString then
@@ -355,6 +416,9 @@ begin
   Prop := GetPropInfo(Ctrl, Name);
   if Prop <> nil then
   begin
+    if (Prop^.SetProc <> nil) and IsEditableType(Prop^.PropType^) and not CanSetString(Prop) then
+      raise EConvertError.CreateFmt('%s (%s) cannot be edited: the inspector doesn''t share the ' +
+        'target''s memory manager.', [GetPropName(Prop), GetTypeName(Prop^.PropType^)]);
     if not IsEditablePublished(Prop) then
       raise EConvertError.CreateFmt('%s (%s) cannot be edited in VclSpy.',
         [GetPropName(Prop), GetTypeName(Prop^.PropType^)]);
@@ -383,7 +447,7 @@ begin
   ExtraProps := ExtraProps + [P];
 end;
 
-procedure AddStr(const Name, Scope: string; Info: PTypeInfo; WinControlOnly: Boolean;
+procedure AddStr(const Name, Scope: string; Info: PTypeInfo; WinControlOnly, KeepsString: Boolean;
   const GetStr: TFunc<TControl, string>; const SetStr: TProc<TControl, string>);
 var
   P: TExtraProp;
@@ -393,6 +457,7 @@ begin
   P.Scope := Scope;
   P.Info := Info;
   P.WinControlOnly := WinControlOnly;
+  P.KeepsString := KeepsString;
   P.GetStr := GetStr;
   P.SetStr := SetStr;
   ExtraProps := ExtraProps + [P];
@@ -414,6 +479,9 @@ procedure RegisterExtraProps;
 const
   AnyControl = False;
   WinControl = True;
+  // SetText hands the window a copy (WM_SETTEXT); the others store the string
+  ByMessage = False;
+  Keeps = True;
 begin
   // TControl, public
   AddOrd('Visible', 'public', TypeInfo(Boolean), AnyControl,
@@ -443,15 +511,15 @@ begin
   AddOrd('StyleElements', 'public', TypeInfo(TStyleElements), AnyControl,
     function(X: TControl): Integer begin Result := Byte(X.StyleElements) end,
     procedure(X: TControl; V: Integer) begin X.StyleElements := TStyleElements(Byte(V)) end);
-  AddStr('StyleName', 'public', TypeInfo(string), AnyControl,
+  AddStr('StyleName', 'public', TypeInfo(string), AnyControl, Keeps,
     function(X: TControl): string begin Result := X.StyleName end,
     procedure(X: TControl; V: string) begin X.StyleName := V end);
 
   // TControl, protected
-  AddStr('Caption', 'protected', TypeInfo(TCaption), AnyControl,
+  AddStr('Caption', 'protected', TypeInfo(TCaption), AnyControl, ByMessage,
     function(X: TControl): string begin Result := C(X).Caption end,
     procedure(X: TControl; V: string) begin C(X).Caption := V end);
-  AddStr('Text', 'protected', TypeInfo(TCaption), AnyControl,
+  AddStr('Text', 'protected', TypeInfo(TCaption), AnyControl, ByMessage,
     function(X: TControl): string begin Result := C(X).Text end,
     procedure(X: TControl; V: string) begin C(X).Text := V end);
   AddOrd('Color', 'protected', TypeInfo(TColor), AnyControl,
@@ -530,7 +598,7 @@ begin
   AddOrd('ImeMode', 'protected', TypeInfo(TImeMode), WinControl,
     function(X: TControl): Integer begin Result := Ord(W(X).ImeMode) end,
     procedure(X: TControl; V: Integer) begin W(X).ImeMode := TImeMode(V) end);
-  AddStr('ImeName', 'protected', TypeInfo(TImeName), WinControl,
+  AddStr('ImeName', 'protected', TypeInfo(TImeName), WinControl, Keeps,
     function(X: TControl): string begin Result := W(X).ImeName end,
     procedure(X: TControl; V: string) begin W(X).ImeName := V end);
 end;

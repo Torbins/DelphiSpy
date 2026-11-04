@@ -1,9 +1,16 @@
 program TestTarget;
 
 { Target app for testing VclSpy. build.cmd builds it with runtime packages
-  rtl;vcl for Delphi 10.4 and 11, x86 and x64, plus one variant without packages. }
+  rtl;vcl for Delphi 10.4 and 11, x86 and x64, and without packages: plain,
+  with ShareMem (SHAREMEM) and with SimpleShareMem (SIMPLESHAREMEM). }
 
 uses
+{$IFDEF SHAREMEM}
+  ShareMem,
+{$ENDIF}
+{$IFDEF SIMPLESHAREMEM}
+  SimpleShareMem,
+{$ENDIF}
   Vcl.Forms,
   TestMain in 'TestMain.pas' {frmTest},
   TestFrame in 'TestFrame.pas' {fraSample: TFrame};

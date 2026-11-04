@@ -1,7 +1,7 @@
 @echo off
 rem Builds VclSpy and its test targets with the Delphi command-line compilers.
-rem   VclSpyInspect270 and the 270 test targets: Delphi 10.4 (BDS 21.0)
-rem   everything else:                           Delphi 11   (BDS 22.0)
+rem   VclSpyInspect[NoPkg]270 and the 270 test targets: Delphi 10.4 (BDS 21.0)
+rem   everything else:                                  Delphi 11   (BDS 22.0)
 rem Set BDS21 / BDS22 to override the install folders.
 setlocal EnableExtensions
 set "ROOT=%~dp0"
@@ -23,6 +23,10 @@ call :dcc "%BDS22%" dcc32 Inspector\VclSpyInspect280.dpr    "%BIN%\x86" inspect2
 call :dcc "%BDS22%" dcc64 Inspector\VclSpyInspect280.dpr    "%BIN%\x64" inspect280-x64 "%PKG%" || goto :fail
 call :dcc "%BDS21%" dcc32 Inspector\VclSpyInspect270.dpr    "%BIN%\x86" inspect270-x86 "%PKG%" || goto :fail
 call :dcc "%BDS21%" dcc64 Inspector\VclSpyInspect270.dpr    "%BIN%\x64" inspect270-x64 "%PKG%" || goto :fail
+call :dcc "%BDS22%" dcc32 Inspector\VclSpyInspectNoPkg280.dpr "%BIN%\x86" inspectnopkg280-x86 "" || goto :fail
+call :dcc "%BDS22%" dcc64 Inspector\VclSpyInspectNoPkg280.dpr "%BIN%\x64" inspectnopkg280-x64 "" || goto :fail
+call :dcc "%BDS21%" dcc32 Inspector\VclSpyInspectNoPkg270.dpr "%BIN%\x86" inspectnopkg270-x86 "" || goto :fail
+call :dcc "%BDS21%" dcc64 Inspector\VclSpyInspectNoPkg270.dpr "%BIN%\x64" inspectnopkg270-x64 "" || goto :fail
 
 if /i "%~1"=="notests" goto :done
 call :dcc "%BDS21%" dcc32 Test\TestTarget.dpr "%TESTBIN%\270-x86"       test-270-x86       "%PKG%" || goto :fail
@@ -30,6 +34,14 @@ call :dcc "%BDS21%" dcc64 Test\TestTarget.dpr "%TESTBIN%\270-x64"       test-270
 call :dcc "%BDS22%" dcc32 Test\TestTarget.dpr "%TESTBIN%\280-x86"       test-280-x86       "%PKG%" || goto :fail
 call :dcc "%BDS22%" dcc64 Test\TestTarget.dpr "%TESTBIN%\280-x64"       test-280-x64       "%PKG%" || goto :fail
 call :dcc "%BDS22%" dcc32 Test\TestTarget.dpr "%TESTBIN%\280-x86-nopkg" test-280-x86-nopkg ""      || goto :fail
+call :dcc "%BDS22%" dcc64 Test\TestTarget.dpr "%TESTBIN%\280-x64-nopkg" test-280-x64-nopkg ""      || goto :fail
+call :dcc "%BDS21%" dcc32 Test\TestTarget.dpr "%TESTBIN%\270-x86-nopkg" test-270-x86-nopkg ""      || goto :fail
+rem Without packages, sharing the memory manager through borlndmm.dll (ShareMem) or SimpleShareMem
+call :dcc "%BDS22%" dcc32 Test\TestTarget.dpr "%TESTBIN%\280-x86-sharemem" test-280-x86-sharemem "-DSHAREMEM" || goto :fail
+copy /y "%BDS22%\bin\borlndmm.dll" "%TESTBIN%\280-x86-sharemem\" >nul || goto :fail
+call :dcc "%BDS22%" dcc64 Test\TestTarget.dpr "%TESTBIN%\280-x64-sharemem" test-280-x64-sharemem "-DSHAREMEM" || goto :fail
+copy /y "%BDS22%\bin64\borlndmm.dll" "%TESTBIN%\280-x64-sharemem\" >nul || goto :fail
+call :dcc "%BDS22%" dcc32 Test\TestTarget.dpr "%TESTBIN%\280-x86-simplesharemem" test-280-x86-simplesharemem "-DSIMPLESHAREMEM" || goto :fail
 
 :done
 echo.

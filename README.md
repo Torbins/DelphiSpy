@@ -1,6 +1,6 @@
 # VclSpy
 
-Inspect, and change, controls of a running Delphi VCL application that is built **with runtime packages**.
+Inspect, and change, controls of a running Delphi VCL application that is built **with runtime packages**, or, with some limits, without them (see [Targets without runtime packages](#targets-without-runtime-packages)).
 Drag the finder (crosshair) from VclSpy onto a control and release.
 VclSpy loads an inspector DLL into the target process. The DLL shares the target's `rtlNNN.bpl`/`vclNNN.bpl`, so it sees the target's real VCL objects.
 
@@ -41,6 +41,8 @@ bin\x86\  bin\x64\
     VclSpyHook.dll                   hook stub, no packages
     VclSpyInspect270.dll             inspector for rtl270/vcl270 targets (Delphi 10.4)
     VclSpyInspect280.dll             inspector for rtl280/vcl280 targets (Delphi 11)
+    VclSpyInspectNoPkg270.dll        inspector for Delphi 10.4 targets without runtime packages
+    VclSpyInspectNoPkg280.dll        inspector for Delphi 11 targets without runtime packages
 ```
 
 Deploy the whole `bin` folder; VclSpy picks `x86` or `x64` by the target's bitness.
@@ -49,12 +51,24 @@ Deploy the whole `bin` folder; VclSpy picks `x86` or `x64` by the target's bitne
 
 1. VclSpy resolves the deepest window under the cursor and checks the target's bitness and elevation. It then runs `bin\<arch>\VclSpyInject.exe --hwnd <h> --x <x> --y <y>`.
 2. The injector installs a `WH_CALLWNDPROC` hook with `VclSpyHook.dll` on the target window's thread and sends it a query message. That loads the stub into the target. The stub runs on the target's **GUI thread**, so touching VCL objects is safe there.
-3. The stub checks which `vclNNN.bpl` is loaded and loads the matching `VclSpyInspectNNN.dll` from its own folder.
+3. The stub checks which `vclNNN.bpl` is loaded and loads the matching `VclSpyInspectNNN.dll` from its own folder. If none is loaded, it loads a no-packages inspector instead (see below).
 4. The inspector runs `FindControl(hwnd)` (walking to the parent window for non-VCL child windows), then `ControlAtPos` for graphic controls. It collects the data and sends JSON back with `WM_COPYDATA`. The injector prints it to stdout.
 
 The inspector DLL stays loaded in the target after the first pick, because unloading package-based DLLs from a live app is risky. Later picks reuse it.
 
 Edits and refreshes run `VclSpyInject.exe --hwnd <h> --request -` with a JSON request on stdin. The injector copies it into an unnamed file mapping and duplicates the handle into the target, so it depends on no named object and no access rights. It then sends a request message through the same hook. The inspector finds the control by its address from the report, but only among live controls (the window tree of `<h>`, then every form), so a stale address is never dereferenced. It sets the property on the GUI thread and replies with a fresh report. The reply's `window.hwnd` is the control's current window, because some property changes recreate window handles.
+
+## Targets without runtime packages
+
+A target that loads no `vclNNN.bpl` links the VCL statically, so it has its own copy of the RTL and VCL. VclSpy then falls back to a no-packages inspector, `VclSpyInspectNoPkgNNN.dll`, which is built without packages too and so has a VCL of its own:
+
+- The stub loads one only if the picked window (or a parent window) has the property that the VCL gives every window it creates (`Delphi` + process ID). It tries the inspectors newest version first. Each checks that the target's `TComponent`, `TControl` and `TWinControl` have its own size and published properties, which means the same Delphi version. An inspector that doesn't match is unloaded again. The one that matches stays loaded.
+- The target's objects are not instances of the inspector's classes, though they have the same layout. So the inspector finds controls through that window property instead of `FindControl`. It compares classes by name instead of `is`, and enumerates the process' windows instead of `Screen.Forms`. Fields, RTTI, virtual methods and the VCL's static methods work on the target's objects.
+- **Memory manager.** Strings cross between the target's code and the inspector's in both directions. If the target uses `ShareMem` (`borlndmm.dll` is loaded), the inspector installs `borlndmm.dll`'s functions with `SetMemoryManager` before anything is allocated, so both use the same memory manager. Otherwise it keeps its own memory manager but guards it. Blocks it allocates are marked. Blocks of the target that it would free are leaked instead, and when it reallocates one, it copies the block. The report's `inspector` and `process.memoryManager` say which: `borlndmm.dll` or `own, guarded`.
+- With the guarded memory manager, the target must not keep strings that the inspector allocated, because the target would free them with its own memory manager. Setters of string properties get a copy that looks like a string literal, so they copy it when they store it. String properties that are written straight to a field (`Hint`, `property X: string read FX write FX`), AnsiString properties, and the unpublished `StyleName` and `ImeName` are read-only then. With `borlndmm.dll`, they are editable.
+- A target that shares its memory manager with `SimpleShareMem` gets the guarded memory manager too: the exe frees all memory of that memory manager when it ends, before the inspector DLL is finalized.
+
+`process.vclModule` names the module that links the VCL the control belongs to (`process.vclPackage` with packages). Edits run some VCL code of the inspector's own VCL copy on the target's control (`TControl.SetText`, `SetAlign`...), so global VCL state (`Screen`, `Application`, styles) seen by that code is the inspector's, not the target's.
 
 ## CLI / scripting
 
@@ -82,7 +96,7 @@ echo {"op":"children","address":"$02A41B20"} | bin\x86\VclSpyInject.exe --hwnd 1
 
 ## Tests
 
-`Test\run-tests.ps1` starts the test targets (10.4/11 × x86/x64, plus one built without packages). It inspects their controls through the CLI, edits some of their properties, and checks the JSON:
+`Test\run-tests.ps1` starts the test targets: 10.4/11 × x86/x64 with packages, and without packages (plain, with `ShareMem` and with `SimpleShareMem`). It inspects their controls through the CLI, edits some of their properties, checks the JSON, and checks that each target still closes normally:
 
 ```bat
 powershell -ExecutionPolicy Bypass -File Test\run-tests.ps1
@@ -90,8 +104,9 @@ powershell -ExecutionPolicy Bypass -File Test\run-tests.ps1
 
 ## Limitations
 
-- The target must use the same major Delphi version's `vclNNN.bpl` as an inspector in `bin`. To support another version, add `Inspector\VclSpyInspectNNN.dpr` (a copy with a different `CompilerVersion` check), build it with that Delphi, and add its suffix to `VclSpyPackageSuffixes` in `Common\VclSpy.Protocol.pas` if it is missing.
-- Controls in modules linked **without** runtime packages (an exe or DLL with static VCL) are not visible to the shared VCL; VclSpy reports this.
+- The target must use the same major Delphi version's `vclNNN.bpl` as an inspector in `bin`, or, without packages, be built with the same Delphi version as a no-packages inspector. To support another version, add `Inspector\VclSpyInspectNNN.dpr` and `Inspector\VclSpyInspectNoPkgNNN.dpr` (copies with a different `CompilerVersion` check), build them with that Delphi, and add its suffix to `VclSpyPackageSuffixes` in `Common\VclSpy.Protocol.pas` if it is missing.
+- In a target with runtime packages, controls of modules that link the VCL statically (a DLL with its own VCL) are not visible to the shared VCL; VclSpy reports this.
+- Without runtime packages, the inspector works on objects of a VCL copy that isn't its own. It is less robust than a package inspector, especially without `ShareMem`. Don't count on the target being in a good state after a debugging session.
 - Elevated targets need VclSpy to run as administrator.
 - Reading properties calls their getters inside the target. That is normally harmless, but it can create window handles that didn't exist yet.
 - Setting a property runs its setter, and whatever the target's code does then (`OnChange`, `OnResize`...), on the target's GUI thread. If that shows a modal dialog, the request times out after 5 seconds; the change still happens.

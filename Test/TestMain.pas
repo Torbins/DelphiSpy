@@ -41,6 +41,12 @@ begin
     Linking := 'packages'
   else
     Linking := 'static';
+{$IFDEF SHAREMEM}
+  Linking := Linking + ' ShareMem';
+{$ENDIF}
+{$IFDEF SIMPLESHAREMEM}
+  Linking := Linking + ' SimpleShareMem';
+{$ENDIF}
   Caption := Format('VclSpy Test %d %s %s', [Trunc(CompilerVersion), Bitness, Linking]);
 end;
 

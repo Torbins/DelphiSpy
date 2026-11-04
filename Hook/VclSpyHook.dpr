@@ -4,7 +4,8 @@ library VclSpyHook;
   without runtime packages and without SysUtils, so it can load into any
   process. On a VclSpy query or request it loads the inspector DLL that
   matches the target's VCL package version and calls it on the target's GUI
-  thread. }
+  thread. A target without a VCL package gets a no-packages inspector, the
+  one built with the target's Delphi version. }
 
 uses
   Winapi.Windows,
@@ -22,12 +23,32 @@ begin
   Result := string(S);
 end;
 
-function ModuleDir: string;
+function HexStr(Value: Cardinal): string;
+const
+  Hex: array[0..15] of Char = '0123456789ABCDEF';
 var
-  Buffer: array[0..MAX_PATH] of Char;
   I: Integer;
 begin
-  SetString(Result, Buffer, GetModuleFileName(HInstance, Buffer, Length(Buffer)));
+  SetLength(Result, 8);
+  for I := 8 downto 1 do
+  begin
+    Result[I] := Hex[Value and $F];
+    Value := Value shr 4;
+  end;
+end;
+
+function ModulePath(Module: HMODULE): string;
+var
+  Buffer: array[0..MAX_PATH] of Char;
+begin
+  SetString(Result, Buffer, GetModuleFileName(Module, Buffer, Length(Buffer)));
+end;
+
+function ModuleDir: string;
+var
+  I: Integer;
+begin
+  Result := ModulePath(HInstance);
   I := Length(Result);
   while (I > 0) and (Result[I] <> '\') do
     Dec(I);
@@ -75,9 +96,84 @@ begin
   Result := '';
 end;
 
-// Loads the inspector DLL that matches the target's VCL package version and
-// returns the address of one of its exports, or nil after sending an error.
-function InspectorProc(ReplyWnd: HWND; const ExportName: string): Pointer;
+// True if Wnd or a parent window belongs to a VCL control of any module:
+// Vcl.Controls gives each window it creates the property 'Delphi' + process id
+function IsVclWindow(Wnd: HWND): Boolean;
+var
+  Name: string;
+begin
+  Name := 'Delphi' + HexStr(GetCurrentProcessId);
+  while Wnd <> 0 do
+  begin
+    if GetProp(Wnd, PChar(Name)) <> 0 then
+      Exit(True);
+    Wnd := GetParent(Wnd);
+  end;
+  Result := False;
+end;
+
+// For a target without VCL package: loads the no-packages inspector of the
+// target's Delphi version. That is the one an earlier pick loaded, or else
+// the first, newest version first, whose probe accepts the control of Wnd.
+// Returns 0 after sending an error.
+function LoadNoPkgInspector(Wnd, ReplyWnd: HWND): HMODULE;
+var
+  I: Integer;
+  Name, Path, Tried: string;
+  Probe: TVclSpyProbeProc;
+  Err: DWORD;
+begin
+  if not IsVclWindow(Wnd) then
+  begin
+    SendError(ReplyWnd, 'The window is not a VCL control: the target loads no vclNNN.bpl, ' +
+      'and the window has no property of a statically linked VCL.');
+    Exit(0);
+  end;
+
+  for I := Low(VclSpyPackageSuffixes) to High(VclSpyPackageSuffixes) do
+  begin
+    Result := GetModuleHandle(PChar(VclSpyNoPkgDllPrefix + VclSpyPackageSuffixes[I] + '.dll'));
+    if Result <> 0 then
+      Exit;
+  end;
+
+  Tried := '';
+  for I := Low(VclSpyPackageSuffixes) to High(VclSpyPackageSuffixes) do
+  begin
+    Name := VclSpyNoPkgDllPrefix + VclSpyPackageSuffixes[I] + '.dll';
+    Path := ModuleDir + Name;
+    if GetFileAttributes(PChar(Path)) = INVALID_FILE_ATTRIBUTES then
+      Continue;
+    Result := LoadLibrary(PChar(Path));
+    if Result = 0 then
+    begin
+      Err := GetLastError;
+      Tried := Tried + ', ' + Name + ' (cannot load it, error ' + IntToStr(Err) + ')';
+      Continue;
+    end;
+    @Probe := GetProcAddress(Result, PChar(VclSpyProbeExport));
+    // Stays loaded, like the package inspectors
+    if Assigned(Probe) and Probe(Wnd) then
+      Exit;
+    // Another Delphi version. Without packages, the DLL unloads cleanly.
+    FreeLibrary(Result);
+    Tried := Tried + ', ' + Name;
+  end;
+
+  if Tried = '' then
+    SendError(ReplyWnd, 'The target is not built with Delphi runtime packages, and there is no ' +
+      VclSpyNoPkgDllPrefix + 'NNN.dll in ' + ModuleDir + '.')
+  else
+    SendError(ReplyWnd, 'The target is not built with Delphi runtime packages, and no no-packages ' +
+      'inspector matches its VCL (tried ' + Copy(Tried, 3, MaxInt) + '). It may be built with a ' +
+      'Delphi version VclSpy does not support.');
+  Result := 0;
+end;
+
+// Loads the inspector DLL that matches the target's VCL package version, or
+// a no-packages inspector, and returns the address of one of its exports, or
+// nil after sending an error.
+function InspectorProc(Wnd, ReplyWnd: HWND; const ExportName: string): Pointer;
 var
   Suffix, Path: string;
   Lib: HMODULE;
@@ -87,30 +183,28 @@ begin
   Suffix := FindLoadedPackage('vcl');
   if Suffix = '' then
   begin
-    Suffix := FindLoadedPackage('rtl');
-    if Suffix <> '' then
-      SendError(ReplyWnd, 'The target loads rtl' + Suffix + '.bpl but not vcl' + Suffix +
-        '.bpl, so it is not a VCL application built with runtime packages.')
-    else
-      SendError(ReplyWnd, 'The target is not built with Delphi runtime packages ' +
-        '(no vclNNN.bpl is loaded in the process).');
-    Exit;
-  end;
-
-  Path := ModuleDir + VclSpyInspectDllPrefix + Suffix + '.dll';
-  if GetFileAttributes(PChar(Path)) = INVALID_FILE_ATTRIBUTES then
+    Lib := LoadNoPkgInspector(Wnd, ReplyWnd);
+    if Lib = 0 then
+      Exit;
+    Path := ModulePath(Lib);
+  end
+  else
   begin
-    SendError(ReplyWnd, 'The target uses vcl' + Suffix + '.bpl, but ' + Path + ' does not exist.');
-    Exit;
-  end;
+    Path := ModuleDir + VclSpyInspectDllPrefix + Suffix + '.dll';
+    if GetFileAttributes(PChar(Path)) = INVALID_FILE_ATTRIBUTES then
+    begin
+      SendError(ReplyWnd, 'The target uses vcl' + Suffix + '.bpl, but ' + Path + ' does not exist.');
+      Exit;
+    end;
 
-  // Stays loaded on purpose: unloading a package-based DLL from a live app is risky
-  Lib := LoadLibrary(PChar(Path));
-  if Lib = 0 then
-  begin
-    Err := GetLastError;
-    SendError(ReplyWnd, 'Cannot load ' + Path + ' into the target (error ' + IntToStr(Err) + ').');
-    Exit;
+    // Stays loaded on purpose: unloading a package-based DLL from a live app is risky
+    Lib := LoadLibrary(PChar(Path));
+    if Lib = 0 then
+    begin
+      Err := GetLastError;
+      SendError(ReplyWnd, 'Cannot load ' + Path + ' into the target (error ' + IntToStr(Err) + ').');
+      Exit;
+    end;
   end;
 
   Result := GetProcAddress(Lib, PChar(ExportName));
@@ -125,7 +219,7 @@ var
   Inspect: TVclSpyInspectProc;
   X, Y: Integer;
 begin
-  @Inspect := InspectorProc(ReplyWnd, VclSpyInspectExport);
+  @Inspect := InspectorProc(Wnd, ReplyWnd, VclSpyInspectExport);
   if Assigned(Inspect) then
   begin
     UnpackPoint(Point, X, Y);
@@ -146,7 +240,7 @@ begin
       Exit;
     end;
     try
-      @Request := InspectorProc(ReplyWnd, VclSpyRequestExport);
+      @Request := InspectorProc(Wnd, ReplyWnd, VclSpyRequestExport);
       if Assigned(Request) then
         Request(Wnd, PAnsiChar(View), ReplyWnd);
     finally

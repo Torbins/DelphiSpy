@@ -1,9 +1,12 @@
 unit VclSpy.Inspector;
 
 { Runs inside the target process, on the GUI thread that owns the picked
-  window. The inspector DLLs are linked with the rtl and vcl runtime packages
-  only, so the VCL objects seen here are the target's own: FindControl works,
-  and Owner, Parent and RTTI can be walked directly.
+  window. The package inspector DLLs are linked with the rtl and vcl runtime
+  packages only, so the VCL objects seen here are the target's own: Owner,
+  Parent and RTTI can be walked directly. The no-packages inspectors link the
+  VCL statically and see the target's objects as foreign ones of the same
+  layout; VclSpy.Target finds them and compares their classes by name, so
+  this unit uses IsKindOf instead of "is".
 
   Requests (VclSpyRequest) are JSON objects with "op" and "address", the
   control.address of an earlier report (or of a parent or child listed in
@@ -20,14 +23,16 @@ uses
 
 procedure VclSpyInspect(Wnd: HWND; X, Y: Integer; ReplyWnd: HWND); stdcall;
 procedure VclSpyRequest(Wnd: HWND; Request: PAnsiChar; ReplyWnd: HWND); stdcall;
+// Exported by the no-packages inspectors only
+function VclSpyProbe(Wnd: HWND): BOOL; stdcall;
 
 implementation
 
 uses
-  Winapi.Messages, System.SysUtils, System.Classes, System.TypInfo, System.Variants,
+  Winapi.Messages, System.Types, System.SysUtils, System.Classes, System.TypInfo, System.Variants,
   System.JSON, System.Generics.Collections, System.Generics.Defaults,
   Vcl.Graphics, Vcl.Controls, Vcl.Forms,
-  VclSpy.Protocol, VclSpy.Properties;
+  VclSpy.Protocol, VclSpy.Properties, VclSpy.Target, VclSpy.MemoryManager;
 
 type
   TControlAccess = class(TControl);
@@ -134,7 +139,7 @@ end;
 
 function ClassModuleName(Cls: TClass): string;
 begin
-  Result := ExtractFileName(ModulePath(FindClassHInstance(Cls)));
+  Result := ExtractFileName(ModulePath(ModuleOf(Cls)));
 end;
 
 function DisplayName(C: TComponent): string;
@@ -150,7 +155,7 @@ function ComponentPath(C: TComponent): string;
 begin
   Result := DisplayName(C);
   C := C.Owner;
-  while (C <> nil) and not (C is TApplication) do
+  while (C <> nil) and not IsKindOf(C, TApplication) do
   begin
     Result := DisplayName(C) + '.' + Result;
     C := C.Owner;
@@ -170,13 +175,13 @@ end;
 
 function ComponentKind(C: TComponent): string;
 begin
-  if C is TCustomForm then
+  if IsKindOf(C, TCustomForm) then
     Result := 'form'
-  else if C is TCustomFrame then
+  else if IsKindOf(C, TCustomFrame) then
     Result := 'frame'
-  else if C is TDataModule then
+  else if IsKindOf(C, TDataModule) then
     Result := 'dataModule'
-  else if C is TControl then
+  else if IsKindOf(C, TControl) then
     Result := 'control'
   else
     Result := 'component';
@@ -196,14 +201,14 @@ function ObjectSummary(Obj: TObject): string;
 begin
   if Obj = nil then
     Result := '(nil)'
-  else if Obj is TComponent then
+  else if IsKindOf(Obj, TComponent) then
     Result := ComponentPath(TComponent(Obj)) + ': ' + Obj.ClassName
-  else if Obj is TCollection then
+  else if IsKindOf(Obj, TCollection) then
     Result := Format('(%s, Count = %d)', [Obj.ClassName, TCollection(Obj).Count])
-  else if Obj is TStrings then
+  else if IsKindOf(Obj, TStrings) then
     Result := Format('(%s, Count = %d) %s', [Obj.ClassName, TStrings(Obj).Count,
       Shorten(TStrings(Obj).CommaText)])
-  else if Obj is TFont then
+  else if IsKindOf(Obj, TFont) then
     Result := Format('(%s) %s, %d pt, %s', [Obj.ClassName, TFont(Obj).Name, TFont(Obj).Size,
       ColorToString(TFont(Obj).Color)])
   else
@@ -288,17 +293,16 @@ begin
         AddStr(Result, 'handler', Declaring.ClassName + '.' + Name);
         AddStr(Result, 'unitName', Declaring.UnitName);
       end;
-      if Obj is TComponent then
+      if IsKindOf(Obj, TComponent) then
         AddStr(Result, 'instance', ComponentPath(TComponent(Obj)) + ': ' + Obj.ClassName)
       else
         AddStr(Result, 'instance', Obj.ClassName);
     end;
   except
-    on E: Exception do
-      AddStr(Result, 'handler', '<error: ' + E.Message + '>');
+    AddStr(Result, 'handler', '<error: ' + ExceptionMessage + '>');
   end;
   AddStr(Result, 'address', Format('$%p', [Method.Code]));
-  AddStr(Result, 'module', ExtractFileName(ModulePath(FindHInstance(Method.Code))));
+  AddStr(Result, 'module', ExtractFileName(ModulePath(ModuleOf(Method.Code))));
 end;
 
 { Sections }
@@ -372,8 +376,7 @@ begin
         try
           Value := PropValueText(Ctrl, Prop);
         except
-          on E: Exception do
-            Value := '<error: ' + E.Message + '>';
+          Value := '<error: ' + ExceptionMessage + '>';
         end;
         Items.Add(PropJson(GetPropName(Prop), Prop^.PropType^, Value, 'published',
           IsEditablePublished(Prop), Types));
@@ -387,8 +390,7 @@ begin
       try
         Value := Extra.ValueText(Ctrl);
       except
-        on E: Exception do
-          Value := '<error: ' + E.Message + '>';
+        Value := '<error: ' + ExceptionMessage + '>';
       end;
       Items.Add(PropJson(Extra.Name, Extra.Info, Value, Extra.Scope, Extra.IsEditable, Types));
     end;
@@ -446,7 +448,7 @@ end;
 
 function ChildCount(C: TControl): Integer;
 begin
-  if C is TWinControl then
+  if IsKindOf(C, TWinControl) then
     Result := TWinControl(C).ControlCount
   else
     Result := 0;
@@ -521,7 +523,7 @@ function PhysicalScreenRect(Ctrl: TControl; const Mapping: TDpiMapping): TRect;
 var
   R: TRect;
 begin
-  if (Ctrl is TWinControl) and TWinControl(Ctrl).HandleAllocated then
+  if IsKindOf(Ctrl, TWinControl) and TWinControl(Ctrl).HandleAllocated then
     GetWindowRect(TWinControl(Ctrl).Handle, R)
   else if Ctrl.Parent <> nil then
   begin
@@ -544,7 +546,7 @@ begin
   AddStr(Result, 'name', Ctrl.Name);
   AddStr(Result, 'className', Ctrl.ClassName);
   AddStr(Result, 'unitName', Ctrl.UnitName);
-  AddStr(Result, 'module', ModulePath(FindClassHInstance(Ctrl.ClassType)));
+  AddStr(Result, 'module', ModulePath(ModuleOf(Ctrl.ClassType)));
   // Identifies the control in requests
   AddStr(Result, 'address', AddressText(Ctrl));
   AddStr(Result, 'path', ComponentPath(Ctrl));
@@ -554,8 +556,8 @@ begin
   AddBool(Result, 'visible', Ctrl.Visible);
   AddBool(Result, 'enabled', Ctrl.Enabled);
   AddInt(Result, 'tag', Ctrl.Tag);
-  AddBool(Result, 'isWinControl', Ctrl is TWinControl);
-  if (Ctrl is TWinControl) and TWinControl(Ctrl).HandleAllocated then
+  AddBool(Result, 'isWinControl', IsKindOf(Ctrl, TWinControl));
+  if IsKindOf(Ctrl, TWinControl) and TWinControl(Ctrl).HandleAllocated then
     AddInt(Result, 'hwnd', TWinControl(Ctrl).Handle);
 
   Bounds := TJSONObject.Create;
@@ -566,7 +568,7 @@ begin
   Result.AddPair('bounds', Bounds);
   Result.AddPair('screenRect', RectJson(PhysicalScreenRect(Ctrl, Mapping)));
 
-  Form := GetParentForm(Ctrl, True);
+  Form := TopParentForm(Ctrl);
   if Form <> nil then
   begin
     FormObj := ComponentJson(Form);
@@ -599,14 +601,6 @@ begin
   AddStr(Result, 'exStyle', Format('$%.8x', [GetWindowLong(Wnd, GWL_EXSTYLE)]));
 end;
 
-// Linked statically instead of through vclNNN.bpl, this DLL would see its own VCL
-function CheckPackages(out Error: string): Boolean;
-begin
-  Result := FindClassHInstance(TControl) <> HInstance;
-  if not Result then
-    Error := ErrorReport('This inspector DLL was built without the rtl;vcl runtime packages.');
-end;
-
 // Wnd is reported as "window": a window on the thread that owns Ctrl, for
 // VclSpy to send requests to
 function NewReport(Ctrl: TControl; Wnd: HWND): TJSONObject;
@@ -618,12 +612,24 @@ begin
   Result := TJSONObject.Create;
   try
     AddBool(Result, 'ok', True);
-    AddStr(Result, 'inspector', Format('%s (Delphi %.1f, %s)', [ExtractFileName(ModulePath(HInstance)),
-      CompilerVersion, {$IFDEF WIN64}'Win64'{$ELSE}'Win32'{$ENDIF}]));
+    if OwnVcl then
+      AddStr(Result, 'inspector', Format('%s (Delphi %.1f, %s, no packages, memory manager: %s)',
+        [ExtractFileName(ModulePath(HInstance)), CompilerVersion, {$IFDEF WIN64}'Win64'{$ELSE}'Win32'{$ENDIF},
+        MemoryManagerText]))
+    else
+      AddStr(Result, 'inspector', Format('%s (Delphi %.1f, %s)', [ExtractFileName(ModulePath(HInstance)),
+        CompilerVersion, {$IFDEF WIN64}'Win64'{$ELSE}'Win32'{$ENDIF}]));
     Process := TJSONObject.Create;
     AddInt(Process, 'pid', GetCurrentProcessId);
     AddStr(Process, 'exe', ParamStr(0));
-    AddStr(Process, 'vclPackage', ClassModuleName(TControl));
+    if OwnVcl then
+    begin
+      // The module that links the target's VCL: the exe, or a DLL with its own VCL
+      AddStr(Process, 'vclModule', ClassModuleName(TargetClass(Ctrl, TControl)));
+      AddStr(Process, 'memoryManager', MemoryManagerText);
+    end
+    else
+      AddStr(Process, 'vclPackage', ClassModuleName(TControl));
     Result.AddPair('process', Process);
     Result.AddPair('window', WindowJson(Wnd));
     Result.AddPair('control', ControlJson(Ctrl, Mapping));
@@ -637,31 +643,25 @@ function BuildReport(Wnd: HWND; const ScreenPt: TPoint): string;
 var
   Mapping: TDpiMapping;
   LogicalPt: TPoint;
-  W: HWND;
   Found: TWinControl;
   Ctrl, Child: TControl;
   Report: TJSONObject;
 begin
-  if not CheckPackages(Result) then
-    Exit;
-
   Mapping.Init(GetAncestor(Wnd, GA_ROOT));
   LogicalPt := Mapping.ToLogical(ScreenPt);
 
   // Child windows that aren't VCL controls (combo box edits, in-place editors)
   // belong to the nearest VCL parent
-  W := Wnd;
-  Found := nil;
-  while (W <> 0) and (Found = nil) do
-  begin
-    Found := FindControl(W);
-    if Found = nil then
-      W := GetParent(W);
-  end;
+  Found := WindowControl(Wnd);
   if Found = nil then
-    Exit(ErrorReport(Format('Window $%x is not a VCL control of the shared VCL (%s). It may be a ' +
-      'non-VCL window, or belong to a module linked without runtime packages.',
-      [NativeUInt(Wnd), ClassModuleName(TControl)])));
+    if OwnVcl then
+      Exit(ErrorReport(Format('Window $%x is not a VCL control.', [NativeUInt(Wnd)])))
+    else
+      Exit(ErrorReport(Format('Window $%x is not a VCL control of the shared VCL (%s). It may be a ' +
+        'non-VCL window, or belong to a module linked without runtime packages.',
+        [NativeUInt(Wnd), ClassModuleName(TControl)])));
+  if not CheckTarget(Found, Result) then
+    Exit(ErrorReport(Result));
 
   // Graphic controls (TLabel, TSpeedButton, TImage...) have no window of their own
   Ctrl := Found;
@@ -682,9 +682,9 @@ end;
 { Requests }
 
 // Finds the control at Address among the live controls, so that an address
-// from an old report is never dereferenced. Searches the window tree the
-// request was sent to first, then every form.
-function FindLiveControl(Address: Pointer; Wnd: HWND): TControl;
+// from an old report is never dereferenced. Searches the window tree of Root
+// (the control of the window the request was sent to) first, then every form.
+function FindLiveControl(Address: Pointer; Root: TControl): TControl;
 
   function Search(Root: TControl): TControl;
   var
@@ -692,7 +692,7 @@ function FindLiveControl(Address: Pointer; Wnd: HWND): TControl;
   begin
     if Pointer(Root) = Address then
       Exit(Root);
-    if Root is TWinControl then
+    if IsKindOf(Root, TWinControl) then
       for I := 0 to TWinControl(Root).ControlCount - 1 do
       begin
         Result := Search(TWinControl(Root).Controls[I]);
@@ -703,15 +703,8 @@ function FindLiveControl(Address: Pointer; Wnd: HWND): TControl;
   end;
 
 var
-  Root: TControl;
-  I: Integer;
+  Form: TWinControl;
 begin
-  Root := nil;
-  while (Wnd <> 0) and (Root = nil) do
-  begin
-    Root := FindControl(Wnd);
-    Wnd := GetParent(Wnd);
-  end;
   if Root <> nil then
   begin
     while Root.Parent <> nil do
@@ -720,9 +713,9 @@ begin
     if Result <> nil then
       Exit;
   end;
-  for I := 0 to Screen.CustomFormCount - 1 do
+  for Form in TargetForms do
   begin
-    Result := Search(Screen.CustomForms[I]);
+    Result := Search(Form);
     if Result <> nil then
       Exit;
   end;
@@ -735,7 +728,7 @@ function ControlWindow(Ctrl: TControl; Fallback: HWND): HWND;
 begin
   while Ctrl <> nil do
   begin
-    if (Ctrl is TWinControl) and TWinControl(Ctrl).HandleAllocated then
+    if IsKindOf(Ctrl, TWinControl) and TWinControl(Ctrl).HandleAllocated then
       Exit(TWinControl(Ctrl).Handle);
     Ctrl := Ctrl.Parent;
   end;
@@ -748,10 +741,12 @@ var
   Request, Report, Changed: TJSONObject;
   Op, Name, Text, OldText: string;
   Address: UInt64;
+  Root: TWinControl;
   Ctrl: TControl;
 begin
-  if not CheckPackages(Result) then
-    Exit;
+  Root := WindowControl(Wnd);
+  if (Root <> nil) and not CheckTarget(Root, Result) then
+    Exit(ErrorReport(Result));
 
   Value := TJSONObject.ParseJSONValue(RequestJson);
   Changed := nil;
@@ -765,7 +760,7 @@ begin
     if not TryStrToUInt64(Request.GetValue<string>('address', ''), Address) then
       Exit(ErrorReport('The request needs "address", the control.address of a report.'));
 
-    Ctrl := FindLiveControl(Pointer(NativeUInt(Address)), Wnd);
+    Ctrl := FindLiveControl(Pointer(NativeUInt(Address)), Root);
     if Ctrl = nil then
       Exit(ErrorReport('The control no longer exists (it may have been destroyed). Pick it again.'));
 
@@ -792,8 +787,8 @@ begin
         OldText := PropertyText(Ctrl, Name);
         SetPropertyText(Ctrl, Name, Text);
       except
-        on E: Exception do
-          Exit(ErrorReport(Format('Cannot set %s: %s', [Name, E.Message])));
+        // Also exceptions of the target's setter, which aren't the inspector's Exception
+        Exit(ErrorReport(Format('Cannot set %s: %s', [Name, ExceptionMessage])));
       end;
       Changed := TJSONObject.Create;
       AddStr(Changed, 'property', Name);
@@ -839,10 +834,7 @@ begin
   try
     Json := BuildReport(Wnd, Point(X, Y));
   except
-    on E: Exception do
-      Json := ErrorReport(E.ClassName + ': ' + E.Message);
-  else
-    Json := ErrorReport('Unknown exception while inspecting the control.');
+    Json := ErrorReport(ExceptionText);
   end;
   SendReply(ReplyWnd, Json);
 end;
@@ -857,12 +849,22 @@ begin
       Delete(Text, 1, 1); // BOM of a request file
     Json := HandleRequest(Wnd, Text);
   except
-    on E: Exception do
-      Json := ErrorReport(E.ClassName + ': ' + E.Message);
-  else
-    Json := ErrorReport('Unknown exception while handling the request.');
+    Json := ErrorReport(ExceptionText);
   end;
   SendReply(ReplyWnd, Json);
+end;
+
+function VclSpyProbe(Wnd: HWND): BOOL; stdcall;
+var
+  Ctrl: TWinControl;
+  Error: string;
+begin
+  try
+    Ctrl := WindowControl(Wnd);
+    Result := (Ctrl <> nil) and CheckTarget(Ctrl, Error);
+  except
+    Result := False;
+  end;
 end;
 
 end.
